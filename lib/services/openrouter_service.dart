@@ -52,8 +52,8 @@ class OpenRouterService {
       final body = <String, dynamic>{
         'model': model,
         'messages': messages,
-        if (maxTokens != null) 'max_tokens': maxTokens,
-        if (temperature != null) 'temperature': temperature,
+        'max_tokens': ?maxTokens,
+        'temperature': ?temperature,
         if (includeReasoning == true) 'include_reasoning': true,
         if (includeReasoning == true) 'reasoning': {'max_tokens': 2048},
       };
