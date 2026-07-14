@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
+import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
 
 class MessageBubble extends StatelessWidget {
   final MessagesTableData message;
@@ -74,13 +75,16 @@ class MessageBubble extends StatelessWidget {
                           message.reasoning!.isNotEmpty)
                         _ReasoningToggle(reasoning: message.reasoning!),
                       // Content
-                      SelectableText(
-                        message.content,
-                        style: TextStyle(
+                      RichContent(
+                        content: message.content,
+                        textStyle: TextStyle(
                           color: isUser
                               ? theme.colorScheme.onPrimary
                               : theme.colorScheme.onSurface,
                         ),
+                        mathColor: isUser
+                            ? theme.colorScheme.onPrimary
+                            : theme.colorScheme.primary,
                       ),
                       // Token count
                       if (showTokenCount &&

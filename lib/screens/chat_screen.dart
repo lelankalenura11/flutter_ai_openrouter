@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
+import 'package:flutter_ai_chat_app_openrouter/widgets/thinking_indicator.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 
@@ -75,20 +76,7 @@ class _ChatScreenState extends State<ChatScreen> {
             final chat = chatProvider.chats
                 .where((c) => c.id == chatProvider.currentChatId)
                 .firstOrNull;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(chat?.title ?? 'Chat'),
-                if (chat != null)
-                  Text(
-                    '⬆${chat.totalInputTokens} ⬇${chat.totalOutputTokens} tokens',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-              ],
-            );
+              return Text(chat?.title ?? 'Chat');
           },
         ),
         actions: [
@@ -161,26 +149,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   return const Center(child: Text('Start a conversation!'));
                 }
 
+                final showThinking = chatProvider.isSending;
+                final itemCount = messages.length + (showThinking ? 1 : 0);
                 return ListView.builder(
                   controller: _scrollController,
                   padding: const EdgeInsets.only(top: 8, bottom: 8),
-                  itemCount: messages.length,
+                  itemCount: itemCount,
                   itemBuilder: (context, index) {
-                    final msg = messages[index];
-                    return MessageBubble(
-                      message: msg,
-                      onCopy: () {
-                        Clipboard.setData(ClipboardData(text: msg.content));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Message copied'),
-                              duration: Duration(seconds: 1)),
-                        );
-                      },
-                      onStar: () async {
-                        await chatProvider._toggleStar(msg.id);
-                      },
-                    );
+                    if (index < messages.length) {
+                      final msg = messages[index];
+                      return MessageBubble(
+                        message: msg,
+                        onCopy: () {
+                          Clipboard.setData(ClipboardData(text: msg.content));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text('Message copied'),
+                                duration: Duration(seconds: 1)),
+                          );
+                        },
+                        onStar: () async {
+                          await chatProvider._toggleStar(msg.id);
+                        },
+                      );
+                    }
+                    // Last item: thinking indicator
+                    return const ThinkingIndicator();
                   },
                 );
               },
