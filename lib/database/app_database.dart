@@ -1,0 +1,242 @@
+import 'dart:io';
+import 'package:drift/drift.dart';
+import 'package:drift/native.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import 'tables/folders_table.dart';
+import 'tables/chats_table.dart';
+import 'tables/messages_table.dart';
+import 'tables/stars_table.dart';
+import 'tables/skills_table.dart';
+import 'tables/message_embeddings_table.dart';
+import 'tables/settings_table.dart';
+
+part 'app_database.g.dart';
+
+// --- DAO-style helper classes (no code gen needed, just use the generated db) ---
+
+/// Convenience methods for folder operations
+extension FolderQueries on AppDatabase {
+  Future<List<FoldersTableData>> getAllFolders() =>
+      select(foldersTable).get();
+
+  Future<FoldersTableData?> getFolder(String id) =>
+      (select(foldersTable)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  Future<void> insertFolder(FoldersTableCompanion folder) =>
+      into(foldersTable).insert(folder);
+
+  Future<void> updateFolder(FoldersTableCompanion folder) =>
+      update(foldersTable).replace(folder);
+
+  Future<void> deleteFolder(String id) =>
+      (delete(foldersTable)..where((t) => t.id.equals(id))).go();
+}
+
+/// Convenience methods for chat operations
+extension ChatQueries on AppDatabase {
+  Future<List<ChatsTableData>> getAllChats() =>
+      (select(chatsTable)..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
+
+  Future<ChatsTableData?> getChat(String id) =>
+      (select(chatsTable)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  Future<List<ChatsTableData>> getChatsByFolder(String? folderId) {
+    if (folderId == null) {
+      return (select(chatsTable)..where((t) => t.folderId.isNull())).get();
+    }
+    return (select(chatsTable)..where((t) => t.folderId.equals(folderId)))
+        .get();
+  }
+
+  Future<void> insertChat(ChatsTableCompanion chat) =>
+      into(chatsTable).insert(chat);
+
+  Future<void> updateChat(ChatsTableCompanion chat) =>
+      update(chatsTable).replace(chat);
+
+  Future<void> deleteChat(String id) =>
+      (delete(chatsTable)..where((t) => t.id.equals(id))).go();
+
+  Future<void> updateChatTokens(String chatId, int inputTokens, int outputTokens) async {
+    await (update(chatsTable)..where((t) => t.id.equals(chatId))).write(
+      ChatsTableCompanion(
+        totalInputTokens: Value(inputTokens),
+        totalOutputTokens: Value(outputTokens),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+}
+
+/// Convenience methods for message operations
+extension MessageQueries on AppDatabase {
+  Future<List<MessagesTableData>> getMessages(String chatId) =>
+      (select(messagesTable)
+            ..where((t) => t.chatId.equals(chatId))
+            ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          .get();
+
+  Future<MessagesTableData?> getMessage(String id) =>
+      (select(messagesTable)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  Future<void> insertMessage(MessagesTableCompanion message) =>
+      into(messagesTable).insert(message);
+
+  Future<void> updateMessage(MessagesTableCompanion message) =>
+      update(messagesTable).replace(message);
+
+  Future<void> deleteMessage(String id) =>
+      (delete(messagesTable)..where((t) => t.id.equals(id))).go();
+}
+
+/// Convenience methods for star operations
+extension StarQueries on AppDatabase {
+  Future<List<StarsTableData>> getStarredMessages() =>
+      select(starsTable).get();
+
+  Future<StarsTableData?> getStar(String messageId) =>
+      (select(starsTable)..where((t) => t.messageId.equals(messageId)))
+          .getSingleOrNull();
+
+  Future<void> toggleStar(String messageId) async {
+    final existing = await getStar(messageId);
+    if (existing != null) {
+      await (delete(starsTable)..where((t) => t.messageId.equals(messageId))).go();
+    } else {
+      await into(starsTable).insert(StarsTableCompanion(
+        messageId: Value(messageId),
+        starredAt: Value(DateTime.now()),
+      ));
+    }
+  }
+}
+
+/// Convenience methods for skill operations
+extension SkillQueries on AppDatabase {
+  Future<List<SkillsTableData>> getAllSkills() => select(skillsTable).get();
+
+  Future<SkillsTableData?> getSkill(String id) =>
+      (select(skillsTable)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  Future<void> insertSkill(SkillsTableCompanion skill) =>
+      into(skillsTable).insert(skill);
+
+  Future<void> updateSkill(SkillsTableCompanion skill) =>
+      update(skillsTable).replace(skill);
+
+  Future<void> deleteSkill(String id) =>
+      (delete(skillsTable)..where((t) => t.id.equals(id))).go();
+}
+
+/// Convenience methods for settings operations
+extension SettingsQueries on AppDatabase {
+  Future<SettingsTableData?> getSettings() =>
+      (select(settingsTable)..where((t) => t.id.equals('default')))
+          .getSingleOrNull();
+
+  Future<void> updateSettings(SettingsTableCompanion settings) =>
+      update(settingsTable).replace(settings);
+}
+
+// --- Main Database Class ---
+
+@DriftDatabase(
+  tables: [
+    FoldersTable,
+    ChatsTable,
+    MessagesTable,
+    StarsTable,
+    SkillsTable,
+    MessageEmbeddingsTable,
+    SettingsTable,
+  ],
+)
+class AppDatabase extends _$AppDatabase {
+  AppDatabase() : super(_openConnection());
+
+  @override
+  int get schemaVersion => 1;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (Migrator m) async {
+          await m.createAll();
+
+          // Insert default settings
+          await into(settingsTable).insert(SettingsTableCompanion(
+            id: const Value('default'),
+            openrouterModel: const Value('openai/gpt-4o'),
+            maxTokens: const Value(4096),
+            temperature: const Value(0.7),
+            theme: const Value('system'),
+          ));
+
+          // Insert built-in skills
+          final now = DateTime.now();
+          final builtInSkills = [
+            (
+              id: 'builtin_code_expert',
+              name: 'Code Expert',
+              prompt:
+                  'You are an expert software engineer. Provide clear, well-explained code solutions. '
+                  'Consider best practices, edge cases, and performance. When relevant, explain your reasoning.',
+            ),
+            (
+              id: 'builtin_summarizer',
+              name: 'Summarizer',
+              prompt:
+                  'You are a skilled summarizer. Condense the given information into a clear, concise summary. '
+                  'Focus on key points and avoid unnecessary details. Use bullet points when appropriate.',
+            ),
+            (
+              id: 'builtin_analyst',
+              name: 'Analyst',
+              prompt:
+                  'You are a data and logic analyst. Break down complex topics into their components, '
+                  'identify patterns, and provide structured analysis. Support your conclusions with evidence.',
+            ),
+            (
+              id: 'builtin_creative_writer',
+              name: 'Creative Writer',
+              prompt:
+                  'You are a creative writer. Craft engaging, imaginative content with vivid descriptions. '
+                  'Adapt your tone and style to match the user\'s request, whether it\'s storytelling, poetry, or creative prose.',
+            ),
+            (
+              id: 'builtin_teacher',
+              name: 'Teacher',
+              prompt:
+                  'You are a patient and knowledgeable teacher. Explain concepts clearly and simply. '
+                  'Use analogies, examples, and step-by-step reasoning. Adapt your explanations to the user\'s level of understanding.',
+            ),
+          ];
+
+          for (final skill in builtInSkills) {
+            await into(skillsTable).insert(SkillsTableCompanion(
+              id: Value(skill.id),
+              name: Value(skill.name),
+              systemPrompt: Value(skill.prompt),
+              isBuiltin: const Value(true),
+              createdAt: Value(now),
+            ));
+          }
+        },
+      );
+}
+
+LazyDatabase _openConnection() {
+  return LazyDatabase(() async {
+    final dbFolder = await getApplicationDocumentsDirectory();
+    final file = File(p.join(dbFolder.path, 'chat_app.sqlite'));
+
+    final cachebase = p.join(dbFolder.path, '.cache');
+    final cacheDir = Directory(cachebase);
+    if (!cacheDir.existsSync()) {
+      cacheDir.createSync();
+    }
+
+    return NativeDatabase.createInBackground(file);
+  });
+}
