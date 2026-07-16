@@ -1,20 +1,23 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:flutter_ai_chat_app_openrouter/config/constants.dart';
 import '../services/auth_service.dart';
 
 /// Represents a single content part in a multimodal message.
 class ContentPart {
-  final String type; // 'text' or 'image_url'
+  final String type;
   final String? text;
-  final String? imageUrl; // base64 data URL or URL
+  final String? imageUrl;
 
   const ContentPart({required this.type, this.text, this.imageUrl});
 }
 
 class OpenRouterService {
   final AuthService _authService;
+  http.Client? _activeClient;
 
   OpenRouterService(this._authService);
 
@@ -26,6 +29,12 @@ class OpenRouterService {
         'HTTP-Referer': 'https://flutter-ai-chat.app',
         'X-Title': AppConstants.appName,
       };
+
+  /// Cancel any currently active request
+  void cancelRequest() {
+    _activeClient?.close();
+    _activeClient = null;
+  }
 
   /// Test the connection by hitting a lightweight endpoint
   Future<bool> testConnection({required String apiKey, String? model}) async {
@@ -44,11 +53,7 @@ class OpenRouterService {
     }
   }
 
-  /// Send a chat completion request to OpenRouter.
-  ///
-  /// [messages] should follow the standard OpenRouter format.
-  /// For multimodal messages, the content field can be a String (plain text)
-  /// or a List<Map> of content parts (text + image_url).
+  /// Send a chat completion request to OpenRouter (non-streaming).
   Future<OpenRouterResponse> sendChatMessage({
     required String model,
     required List<Map<String, dynamic>> messages,
@@ -92,25 +97,156 @@ class OpenRouterService {
     }
   }
 
-  /// Build a multimodal content array from text and an optional attachment.
-  ///
-  /// For images, encodes the file as a base64 data URL.
-  /// For other file types, returns the text only (file types are sent as text
-  /// context; actual file upload is not supported by OpenRouter chat completions).
+  /// Send a streaming chat completion request to OpenRouter.
+  /// Returns a [StreamSubscription] of content tokens as they arrive.
+  /// Calls [onToken] with each text chunk.
+  /// Calls [onComplete] with the complete response when done.
+  /// Calls [onError] on failure.
+  StreamSubscription<String>? sendChatMessageStream({
+    required String model,
+    required List<Map<String, dynamic>> messages,
+    required void Function(String token) onToken,
+    required void Function(OpenRouterResponse response) onComplete,
+    required void Function(String error) onError,
+    int? maxTokens,
+    double? temperature,
+    bool? includeReasoning,
+  }) {
+    _getApiKey().then((apiKey) async {
+      if (apiKey == null || apiKey.isEmpty) {
+        onError('API key not set');
+        return;
+      }
+
+      try {
+        _activeClient?.close();
+        _activeClient = http.Client();
+
+        final url = Uri.parse('${AppConstants.openRouterBaseUrl}/chat/completions');
+        final body = <String, dynamic>{
+          'model': model,
+          'messages': messages,
+          'max_tokens': maxTokens,
+          'temperature': temperature,
+          'stream': true,
+          if (includeReasoning == true) 'include_reasoning': true,
+          if (includeReasoning == true) 'reasoning': {'max_tokens': 2048},
+        };
+
+        final request = http.Request('POST', url)
+          ..headers.addAll(_headers(apiKey))
+          ..body = jsonEncode(body);
+
+        final response = await _activeClient!.send(request);
+
+        if (response.statusCode != 200) {
+          final errorBody = await response.stream.bytesToString();
+          onError('HTTP ${response.statusCode}: $errorBody');
+          return;
+        }
+
+        final fullContent = StringBuffer();
+        String? reasoning;
+        int? promptTokens;
+        int? completionTokens;
+        String? finishReason;
+
+        await for (final chunk in response.stream.transform(utf8.decoder)) {
+          // Parse SSE format: "data: {...}\n\n"
+          final lines = chunk.split('\n');
+          for (final line in lines) {
+            if (!line.startsWith('data: ')) continue;
+            final jsonStr = line.substring(6).trim();
+            if (jsonStr == '[DONE]') break;
+
+            try {
+              final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+              final choices = data['choices'] as List<dynamic>?;
+              if (choices == null || choices.isEmpty) continue;
+
+              final choice = choices[0] as Map<String, dynamic>;
+              final delta = choice['delta'] as Map<String, dynamic>?;
+              final finish = choice['finish_reason'] as String?;
+              if (finish != null) finishReason = finish;
+
+              if (delta == null) continue;
+
+              final content = delta['content'] as String?;
+              final reasoningContent = delta['reasoning'] as String?;
+
+              if (content != null && content.isNotEmpty) {
+                fullContent.write(content);
+                onToken(content);
+              }
+              if (reasoningContent != null && reasoningContent.isNotEmpty) {
+                reasoning = (reasoning ?? '') + reasoningContent;
+              }
+
+              // Usage info is in the final chunk
+              final usage = data['usage'] as Map<String, dynamic>?;
+              if (usage != null) {
+                promptTokens = usage['prompt_tokens'] as int?;
+                completionTokens = usage['completion_tokens'] as int?;
+              }
+
+              // Some models put usage in the final choice
+              final choiceUsage = choice['usage'] as Map<String, dynamic>?;
+              if (choiceUsage != null) {
+                promptTokens ??= choiceUsage['prompt_tokens'] as int?;
+                completionTokens ??= choiceUsage['completion_tokens'] as int?;
+              }
+            } catch (e) {
+              // Skip malformed JSON chunks
+            }
+          }
+        }
+
+        onComplete(OpenRouterResponse(
+          content: fullContent.toString(),
+          reasoning: reasoning,
+          promptTokens: promptTokens,
+          completionTokens: completionTokens,
+        ));
+      } catch (e) {
+        if (e is SocketException || e is HttpException ||
+            e.toString().contains('Client') || e.toString().contains('closed')) {
+          // Request was cancelled — not an error
+          return;
+        }
+        onError('Network error: $e');
+      }
+    });
+
+    return null; // StreamSubscription not needed since we use callbacks
+  }
+
+  /// Build a multimodal content array from text and image(s).
   static List<Map<String, dynamic>> buildMultimodalContent({
     required String text,
     String? attachmentPath,
     String? inputType,
+    List<Uint8List>? imageBytesList,
   }) {
     final parts = <Map<String, dynamic>>[];
 
-    // Add text part
     if (text.isNotEmpty) {
       parts.add({'type': 'text', 'text': text});
     }
 
-    // Add image part if present
-    if (attachmentPath != null && inputType == 'image') {
+    if (imageBytesList != null && imageBytesList.isNotEmpty) {
+      for (final bytes in imageBytesList) {
+        if (bytes.isEmpty) continue;
+        try {
+          final base64 = base64Encode(bytes);
+          parts.add({
+            'type': 'image_url',
+            'image_url': {'url': 'data:image/png;base64,$base64'},
+          });
+        } catch (e) {
+          // Skip invalid images
+        }
+      }
+    } else if (attachmentPath != null && inputType == 'image') {
       try {
         final file = File(attachmentPath);
         if (file.existsSync()) {
@@ -127,12 +263,9 @@ class OpenRouterService {
             'image_url': {'url': 'data:$mimeType;base64,$base64'},
           });
         }
-      } catch (e) {
-        // If file can't be read, just send text
-      }
+      } catch (e) {}
     }
 
-    // If no parts were added (shouldn't happen), return a text fallback
     if (parts.isEmpty) {
       parts.add({'type': 'text', 'text': text});
     }

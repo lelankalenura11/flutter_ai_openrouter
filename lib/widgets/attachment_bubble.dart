@@ -77,24 +77,78 @@ class AttachmentBubble extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: (isUser
-                      ? Theme.of(context).colorScheme.onPrimary
-                      : Theme.of(context).colorScheme.surfaceContainerLow)
+                      ? theme.colorScheme.onPrimary
+                      : theme.colorScheme.surfaceContainerLow)
                   .withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: theme.colorScheme.outlineVariant,
-              ),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  Icons.picture_as_pdf,
-                  color: Colors.red.shade400,
-                  size: 28,
-                ),
+                Icon(Icons.picture_as_pdf,
+                    color: Colors.red.shade400, size: 28),
                 const SizedBox(width: 8),
-                Column(
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        fileName,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: isUser
+                              ? theme.colorScheme.onPrimary
+                              : theme.colorScheme.onSurface,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        _formatSize(fileSize),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: (isUser
+                                  ? theme.colorScheme.onPrimary
+                                  : theme.colorScheme.onSurface)
+                              .withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Other file types
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () => _openMediaViewer(context),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: (isUser
+                    ? theme.colorScheme.onPrimary
+                    : theme.colorScheme.surfaceContainerLow)
+                .withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.insert_drive_file,
+                  color: theme.colorScheme.primary, size: 28),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -122,66 +176,6 @@ class AttachmentBubble extends StatelessWidget {
                     ),
                   ],
                 ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    // Other file types
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: GestureDetector(
-        onTap: () => _openMediaViewer(context),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: (isUser
-                    ? Theme.of(context).colorScheme.onPrimary
-                    : Theme.of(context).colorScheme.surfaceContainerLow)
-                .withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: theme.colorScheme.outlineVariant,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.insert_drive_file,
-                color: theme.colorScheme.primary,
-                size: 28,
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    fileName,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: isUser
-                          ? theme.colorScheme.onPrimary
-                          : theme.colorScheme.onSurface,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    _formatSize(fileSize),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: (isUser
-                              ? theme.colorScheme.onPrimary
-                              : theme.colorScheme.onSurface)
-                          .withValues(alpha: 0.6),
-                    ),
-                  ),
-                ],
               ),
             ],
           ),

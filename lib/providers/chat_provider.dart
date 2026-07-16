@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:drift/drift.dart';
@@ -5,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/pdf_service.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Maps raw error strings to user-friendly messages
@@ -32,7 +34,6 @@ String _friendlyError(dynamic error) {
   if (s.contains('model')) {
     return 'The selected model is not available. Try a different model in Settings.';
   }
-  // Fallback — show a generic message, never raw errors
   return 'Something went wrong. Please try again.';
 }
 
@@ -40,6 +41,10 @@ class ChatProvider extends ChangeNotifier {
   final AppDatabase _db;
   final OpenRouterService _openRouterService;
   final Uuid _uuid = const Uuid();
+
+  // Streaming state for assistant messages being generated
+  String? _streamingMessageId;
+  String? _streamingChatId;
 
   // Chats
   List<ChatsTableData> _chats = [];
@@ -51,22 +56,24 @@ class ChatProvider extends ChangeNotifier {
   String? _activeSkillId;
   String? _activeSkillPrompt;
 
+  // The streaming content accumulated so far (for persistence across chat switches)
+  String _streamingContent = '';
+  String? _streamingReasoning;
+  int? _streamingInputTokens;
+  int? _streamingOutputTokens;
+
   // Folders
   List<FoldersTableData> _folders = [];
 
-  // Stars — set of starred message IDs for quick lookup
+  // Stars
   Set<String> _starredMessageIds = {};
-
-  // Starred messages list
   List<MessagesTableData> _starredMessages = [];
-
-  // Starred messages with chat info (for starred screen)
   List<StarredMessageInfo> _starredWithChatInfo = [];
 
-  // Failed message IDs that can be retried
+  // Failed messages
   Set<String> _failedMessageIds = {};
 
-  // Pending attachment (set by chat_screen before sending)
+  // Pending attachment
   FileAttachment? _pendingAttachment;
 
   // Getters
@@ -84,6 +91,15 @@ class ChatProvider extends ChangeNotifier {
   List<StarredMessageInfo> get starredWithChatInfo => _starredWithChatInfo;
   Set<String> get failedMessageIds => _failedMessageIds;
   FileAttachment? get pendingAttachment => _pendingAttachment;
+  String? get streamingMessageId => _streamingMessageId;
+  String? get streamingChatId => _streamingChatId;
+
+  /// True if any chat (not just the current one) is generating
+  bool get anyChatGenerating => _isSending && _streamingChatId != null;
+
+  /// True if the given chat ID is currently generating
+  bool isChatGenerating(String chatId) =>
+      _isSending && _streamingChatId == chatId;
 
   ChatProvider(this._db, this._openRouterService);
 
@@ -92,19 +108,16 @@ class ChatProvider extends ChangeNotifier {
     return _chats.where((c) => c.id == _currentChatId).firstOrNull;
   }
 
-  /// Set a pending attachment that will be sent with the next message.
   void setPendingAttachment(FileAttachment? attachment) {
     _pendingAttachment = attachment;
     notifyListeners();
   }
 
-  /// Clear the pending attachment without sending.
   void clearPendingAttachment() {
     _pendingAttachment = null;
     notifyListeners();
   }
 
-  /// Copies the attachment file to app-local storage for persistence.
   Future<String> _storeAttachmentLocally(String sourcePath, String inputType) async {
     final appDir = await getApplicationDocumentsDirectory();
     final attachDir = Directory('${appDir.path}/attachments');
@@ -115,6 +128,22 @@ class ChatProvider extends ChangeNotifier {
     final destPath = '${attachDir.path}/${_uuid.v4()}.$ext';
     await File(sourcePath).copy(destPath);
     return destPath;
+  }
+
+  // ========================================================================
+  // Cancel generation
+  // ========================================================================
+
+  void cancelResponse() {
+    _openRouterService.cancelRequest();
+    _isSending = false;
+    _streamingMessageId = null;
+    _streamingChatId = null;
+    _streamingContent = '';
+    _streamingReasoning = null;
+    _streamingInputTokens = null;
+    _streamingOutputTokens = null;
+    notifyListeners();
   }
 
   // ========================================================================
@@ -182,6 +211,36 @@ class ChatProvider extends ChangeNotifier {
 
     try {
       _messages = await _db.getMessages(id);
+
+      // If this chat is currently streaming, add the in-progress placeholder
+      if (_streamingChatId == id && _streamingMessageId != null) {
+        final hasPlaceholder = _messages.any((m) => m.id == _streamingMessageId);
+        if (!hasPlaceholder) {
+          _messages.add(MessagesTableData(
+            id: _streamingMessageId!,
+            chatId: id,
+            role: 'assistant',
+            content: _streamingContent,
+            inputType: 'text',
+            attachmentPath: null,
+            inputTokens: _streamingInputTokens,
+            outputTokens: _streamingOutputTokens,
+            reasoning: _streamingReasoning,
+            status: 'sending',
+            createdAt: DateTime.now(),
+            editedAt: null,
+          ));
+        } else {
+          // Update existing placeholder with streaming content
+          final idx = _messages.indexWhere((m) => m.id == _streamingMessageId);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(
+              content: _streamingContent,
+            );
+          }
+        }
+      }
+
       _failedMessageIds = _messages
           .where((m) => m.status == 'failed')
           .map((m) => m.id)
@@ -212,7 +271,6 @@ class ChatProvider extends ChangeNotifier {
   Future<void> renameChat(String chatId, String title) async {
     try {
       await _db.renameChat(chatId, title);
-      // Reload chats to get updated data
       _chats = await _db.getAllChats();
       notifyListeners();
     } catch (e) {
@@ -268,7 +326,6 @@ class ChatProvider extends ChangeNotifier {
     try {
       await _db.deleteFolder(id);
       _folders.removeWhere((f) => f.id == id);
-      // Refresh chats list in case any were in this folder
       _chats = await _db.getAllChats();
       notifyListeners();
     } catch (e) {
@@ -338,7 +395,6 @@ class ChatProvider extends ChangeNotifier {
       final now = DateTime.now();
       final newChatId = _uuid.v4();
 
-      // Create the new chat
       final chat = ChatsTableCompanion(
         id: Value(newChatId),
         title: Value('Forked chat'),
@@ -350,7 +406,6 @@ class ChatProvider extends ChangeNotifier {
       );
       await _db.insertChat(chat);
 
-      // Copy messages with new IDs
       for (final msg in sourceMessages) {
         await _db.insertMessage(MessagesTableCompanion(
           id: Value(_uuid.v4()),
@@ -367,7 +422,6 @@ class ChatProvider extends ChangeNotifier {
         ));
       }
 
-      // Reload chats and switch to the new one
       _chats = await _db.getAllChats();
       _currentChatId = newChatId;
       _messages = await _db.getMessages(newChatId);
@@ -389,7 +443,6 @@ class ChatProvider extends ChangeNotifier {
       final settings = await _db.getSettings();
       if (settings == null) return;
 
-      // Use a cheap/fast model for title generation
       final messages = [
         {
           'role': 'system',
@@ -406,7 +459,7 @@ class ChatProvider extends ChangeNotifier {
       ];
 
       final response = await _openRouterService.sendChatMessage(
-        model: 'openai/gpt-4o-mini', // Cheap model for title gen
+        model: 'openai/gpt-4o-mini',
         messages: messages,
         maxTokens: 30,
         temperature: 0.3,
@@ -414,22 +467,17 @@ class ChatProvider extends ChangeNotifier {
 
       if (!response.isError && response.content != null && response.content!.trim().isNotEmpty) {
         var title = response.content!.trim();
-        // Remove any quotes the model might add
         title = title.replaceAll(RegExp(r'''^["']|["']$'''), '');
-        // Cap at 60 chars
         if (title.length > 60) title = title.substring(0, 57) + '...';
         await _db.renameChat(chatId, title);
-
         _chats = await _db.getAllChats();
         notifyListeners();
       }
-    } catch (_) {
-      // Silently ignore title generation failures — it's not critical
-    }
+    } catch (_) {}
   }
 
   // ========================================================================
-  // Send message with friendly errors, retry & attachment support
+  // Send message with streaming support
   // ========================================================================
 
   void clearError() {
@@ -437,17 +485,12 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Resend a failed message by its ID
   Future<void> retryMessage(String messageId) async {
     final msg = _messages.where((m) => m.id == messageId).firstOrNull;
     if (msg == null || msg.role != 'user') return;
     await sendMessage(msg.content, messageIdToReplace: messageId);
   }
 
-  /// Send a message, optionally with a file attachment.
-  ///
-  /// If [messageIdToReplace] is provided, it updates that message's content
-  /// instead of creating a new one (used for retry).
   Future<void> sendMessage(
     String text, {
     String? messageIdToReplace,
@@ -455,26 +498,28 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     if (_currentChatId == null && text.isEmpty && attachment == null) return;
 
-    // Use pending attachment if none provided directly
+    // Don't allow sending while already streaming
+    if (_isSending) return;
+
     final effectiveAttachment = attachment ?? _pendingAttachment;
 
     _isSending = true;
     _error = null;
+    _streamingChatId = _currentChatId;
     notifyListeners();
 
     try {
-      // Ensure a chat exists if we're sending a first message
       if (_currentChatId == null) {
         final id = await createChat(skillId: _activeSkillId);
         if (id == null) {
           _error = 'Failed to create chat';
           _isSending = false;
+          _streamingChatId = null;
           notifyListeners();
           return;
         }
       }
 
-      // Get settings for model params
       final settings = await _db.getSettings();
       final model = settings?.openrouterModel ?? 'openai/gpt-4o';
       final maxTokens = settings?.maxTokens ?? 4096;
@@ -483,7 +528,6 @@ class ChatProvider extends ChangeNotifier {
       final now = DateTime.now();
       String userMsgId;
 
-      // Store attachment locally if present
       String? storedAttachmentPath;
       String inputType = 'text';
       if (effectiveAttachment != null) {
@@ -495,17 +539,14 @@ class ChatProvider extends ChangeNotifier {
       }
 
       if (messageIdToReplace != null) {
-        // Retry: update the existing failed message status to 'sending'
         userMsgId = messageIdToReplace;
         await _db.updateMessageStatus(userMsgId, 'sending');
-        // Reload messages to reflect status change
         if (_currentChatId != null) {
           _messages = await _db.getMessages(_currentChatId!);
         }
         _failedMessageIds.remove(userMsgId);
         notifyListeners();
       } else {
-        // Create user message locally
         userMsgId = _uuid.v4();
         final userMessage = MessagesTableCompanion(
           id: Value(userMsgId),
@@ -519,7 +560,6 @@ class ChatProvider extends ChangeNotifier {
         );
         await _db.insertMessage(userMessage);
 
-        // Insert into local list immediately
         _messages.add(MessagesTableData(
           id: userMsgId,
           chatId: _currentChatId!,
@@ -537,15 +577,20 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Clear pending attachment after using it
       if (_pendingAttachment != null) {
         _pendingAttachment = null;
         notifyListeners();
       }
 
-      // Reload messages to show user message
       _messages = await _db.getMessages(_currentChatId!);
       notifyListeners();
+
+      // Mark user message as sent
+      await _db.updateMessageStatus(userMsgId, 'sent');
+      final userMsgIndex = _messages.indexWhere((m) => m.id == userMsgId);
+      if (userMsgIndex != -1) {
+        _messages[userMsgIndex] = _messages[userMsgIndex].copyWith(status: 'sent');
+      }
 
       // Build message list for API
       final apiMessages = <Map<String, dynamic>>[];
@@ -558,126 +603,180 @@ class ChatProvider extends ChangeNotifier {
       }
 
       for (final msg in _messages) {
-        if (msg.status == 'failed') continue; // Don't include failed messages
-
-        // For messages with image attachments, use multimodal content format
-        if (msg.attachmentPath != null && (msg.inputType == 'image' || msg.inputType == 'video')) {
+        if (msg.attachmentPath != null && (msg.inputType == 'image')) {
           final content = OpenRouterService.buildMultimodalContent(
             text: msg.content,
             attachmentPath: msg.attachmentPath,
             inputType: msg.inputType,
           );
-          apiMessages.add({
-            'role': msg.role,
-            'content': content,
-          });
+          apiMessages.add({'role': msg.role, 'content': content});
         } else if (msg.attachmentPath != null && msg.inputType == 'pdf') {
-          // For PDFs, send a text note about the attached file
+          // PDF as text context (vision-based rendering in Phase 5)
           final content = OpenRouterService.buildMultimodalContent(
-            text: '${msg.content}\n\n[Attached PDF file available locally: ${msg.attachmentPath}]',
-            attachmentPath: null,
+            text: msg.content.isNotEmpty
+                ? msg.content
+                : '[PDF file: ${msg.attachmentPath}]',
           );
-          apiMessages.add({
-            'role': msg.role,
-            'content': content,
-          });
+          apiMessages.add({'role': msg.role, 'content': content});
         } else {
-          // Plain text message
-          apiMessages.add({
-            'role': msg.role,
-            'content': msg.content,
-          });
+          apiMessages.add({'role': msg.role, 'content': msg.content});
         }
       }
 
-      // Call OpenRouter
-      final response = await _openRouterService.sendChatMessage(
+      // Create placeholder assistant message and save to DB immediately
+      final assistantId = _uuid.v4();
+      _streamingMessageId = assistantId;
+      _streamingContent = '';
+      _streamingReasoning = null;
+      _streamingInputTokens = null;
+      _streamingOutputTokens = null;
+
+      // Save placeholder to DB so it persists across chat switches
+      await _db.insertMessage(MessagesTableCompanion(
+        id: Value(assistantId),
+        chatId: Value(_currentChatId!),
+        role: const Value('assistant'),
+        content: const Value(''),
+        inputType: const Value('text'),
+        status: const Value('sending'),
+        createdAt: Value(DateTime.now()),
+      ));
+
+      // Add to local list
+      _messages.add(MessagesTableData(
+        id: assistantId,
+        chatId: _currentChatId!,
+        role: 'assistant',
+        content: '',
+        inputType: 'text',
+        attachmentPath: null,
+        inputTokens: null,
+        outputTokens: null,
+        reasoning: null,
+        status: 'sending',
+        createdAt: DateTime.now(),
+        editedAt: null,
+      ));
+      notifyListeners();
+
+      // Start streaming
+      _openRouterService.sendChatMessageStream(
         model: model,
         messages: apiMessages,
         maxTokens: maxTokens,
         temperature: temperature,
         includeReasoning: true,
-      );
-
-      if (response.isError) {
-        // Mark the user message as failed
-        await _db.updateMessageStatus(userMsgId, 'failed');
-        _failedMessageIds.add(userMsgId);
-        final msgIndex = _messages.indexWhere((m) => m.id == userMsgId);
-        if (msgIndex != -1) {
-          _messages[msgIndex] = _messages[msgIndex].copyWith(status: 'failed');
-        }
-        _error = _friendlyError(response.error);
-        _isSending = false;
-        notifyListeners();
-        return;
-      }
-
-      // Mark user message as sent
-      await _db.updateMessageStatus(userMsgId, 'sent');
-      final msgIndex = _messages.indexWhere((m) => m.id == userMsgId);
-      if (msgIndex != -1) {
-        _messages[msgIndex] = _messages[msgIndex].copyWith(status: 'sent');
-      }
-
-      // Save assistant message
-      final assistantId = _uuid.v4();
-      final assistantMessage = MessagesTableCompanion(
-        id: Value(assistantId),
-        chatId: Value(_currentChatId!),
-        role: const Value('assistant'),
-        content: Value(response.content ?? ''),
-        inputType: const Value('text'),
-        inputTokens: Value(response.promptTokens),
-        outputTokens: Value(response.completionTokens),
-        reasoning: Value(response.reasoning),
-        status: const Value('sent'),
-        createdAt: Value(DateTime.now()),
-      );
-      await _db.insertMessage(assistantMessage);
-
-      // Update chat tokens
-      final chat = await _db.getChat(_currentChatId!);
-      if (chat != null) {
-        await _db.updateChatTokens(
-          _currentChatId!,
-          chat.totalInputTokens + (response.promptTokens ?? 0),
-          chat.totalOutputTokens + (response.completionTokens ?? 0),
-        );
-      }
-
-      // Update chat's updatedAt
-      if (_currentChatId != null) {
-        await (_db.update(_db.chatsTable)..where((t) => t.id.equals(_currentChatId!)))
-            .write(ChatsTableCompanion(
-          updatedAt: Value(DateTime.now()),
-        ));
-      }
-
-      // Reload messages
-      _messages = await _db.getMessages(_currentChatId!);
-
-      // Auto-title logic
-      if (chat != null) {
-        if (chat.title == 'New Chat') {
-          // First response in a brand new chat → auto-title immediately
-          _autoTitleChat(_currentChatId!, text, response.content ?? '');
-        } else if (chat.title == 'Forked chat') {
-          // For forked chats, only auto-title on the SECOND response
-          final existingAssistantCount = _messages
-              .where((m) => m.role == 'assistant' && m.id != assistantId)
-              .length;
-          if (existingAssistantCount > 0) {
-            _autoTitleChat(_currentChatId!, text, response.content ?? '');
+        onToken: (token) {
+          _streamingContent += token;
+          final idx = _messages.indexWhere((m) => m.id == assistantId);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(
+              content: _streamingContent,
+            );
+            notifyListeners();
           }
-        }
-      }
+        },
+        onComplete: (response) async {
+          _streamingContent = response.content ?? '';
+          _streamingReasoning = response.reasoning;
+          _streamingInputTokens = response.promptTokens;
+          _streamingOutputTokens = response.completionTokens;
+
+          // Update the message in DB
+          await (_db.update(_db.messagesTable)..where((t) => t.id.equals(assistantId)))
+              .write(MessagesTableCompanion(
+            content: Value(_streamingContent),
+            inputTokens: Value(_streamingInputTokens),
+            outputTokens: Value(_streamingOutputTokens),
+            reasoning: Value(_streamingReasoning),
+            status: const Value('sent'),
+          ));
+
+          // Update local state
+          final idx = _messages.indexWhere((m) => m.id == assistantId);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(
+              content: _streamingContent,
+              status: 'sent',
+              inputTokens: Value<int?>(_streamingInputTokens),
+              outputTokens: Value<int?>(_streamingOutputTokens),
+              reasoning: Value<String?>(_streamingReasoning),
+            );
+          }
+
+          // Update chat tokens
+          final chat = await _db.getChat(_currentChatId!);
+          if (chat != null) {
+            await _db.updateChatTokens(
+              _currentChatId!,
+              chat.totalInputTokens + (_streamingInputTokens ?? 0),
+              chat.totalOutputTokens + (_streamingOutputTokens ?? 0),
+            );
+          }
+
+          // Update chat updatedAt
+          if (_currentChatId != null) {
+            await (_db.update(_db.chatsTable)..where((t) => t.id.equals(_currentChatId!)))
+                .write(ChatsTableCompanion(
+              updatedAt: Value(DateTime.now()),
+            ));
+          }
+
+          // Auto-title logic
+          if (chat != null) {
+            if (chat.title == 'New Chat') {
+              _autoTitleChat(_currentChatId!, text, _streamingContent);
+            } else if (chat.title == 'Forked chat') {
+              final existingAssistantCount = _messages
+                  .where((m) => m.role == 'assistant' && m.id != assistantId)
+                  .length;
+              if (existingAssistantCount > 0) {
+                _autoTitleChat(_currentChatId!, text, _streamingContent);
+              }
+            }
+          }
+
+          _streamingMessageId = null;
+          _streamingChatId = null;
+          _streamingContent = '';
+          _streamingReasoning = null;
+          _streamingInputTokens = null;
+          _streamingOutputTokens = null;
+          _isSending = false;
+          notifyListeners();
+        },
+        onError: (error) {
+          // Mark as failed in DB
+          _db.updateMessageStatus(assistantId, 'failed');
+          _failedMessageIds.add(assistantId);
+
+          final idx = _messages.indexWhere((m) => m.id == assistantId);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(status: 'failed');
+          }
+
+          _error = _friendlyError(error);
+          _streamingMessageId = null;
+          _streamingChatId = null;
+          _streamingContent = '';
+          _streamingReasoning = null;
+          _streamingInputTokens = null;
+          _streamingOutputTokens = null;
+          _isSending = false;
+          notifyListeners();
+        },
+      );
     } catch (e) {
       _error = _friendlyError(e);
+      _streamingMessageId = null;
+      _streamingChatId = null;
+      _streamingContent = '';
+      _streamingReasoning = null;
+      _streamingInputTokens = null;
+      _streamingOutputTokens = null;
+      _isSending = false;
+      notifyListeners();
     }
-
-    _isSending = false;
-    notifyListeners();
   }
 }
 

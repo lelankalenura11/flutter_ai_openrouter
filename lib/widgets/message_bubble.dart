@@ -33,6 +33,7 @@ class MessageBubble extends StatelessWidget {
     final isAssistant = message.role == 'assistant';
     final theme = Theme.of(context);
     final hasAttachment = message.attachmentPath != null && message.inputType != 'text';
+    final isStreaming = message.status == 'sending' && isAssistant;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -96,10 +97,10 @@ class MessageBubble extends StatelessWidget {
                           inputType: message.inputType,
                           isUser: isUser,
                         ),
-                      // Content text
+                      // Content text — with streaming cursor for in-progress messages
                       if (message.content.isNotEmpty)
                         RichContent(
-                          content: message.content,
+                          content: message.content + (isStreaming ? ' ▎' : ''),
                           textStyle: TextStyle(
                             color: isUser
                                 ? theme.colorScheme.onPrimary

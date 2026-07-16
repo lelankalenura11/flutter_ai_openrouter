@@ -239,11 +239,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                   ),
                   _AttachmentOption(
-                    icon: Icons.insert_drive_file,
-                    label: 'File',
+                    icon: Icons.picture_as_pdf,
+                    label: 'PDF',
                     onTap: () {
                       Navigator.pop(ctx);
-                      _pickFile();
+                      _pickPdf();
                     },
                   ),
                 ],
@@ -316,12 +316,14 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Pick any file type.
-  /// FilePicker handles its own permissions natively.
-  Future<void> _pickFile() async {
+  /// Pick a PDF file.
+  /// Uses FilePicker with allowedExtensions: ['pdf'] per PLAN.md.
+  /// The native OS file picker handles permissions — no runtime permission needed.
+  Future<void> _pickPdf() async {
     try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.any,
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
         allowMultiple: false,
       );
       if (result == null || result.files.isEmpty) return;
@@ -329,54 +331,21 @@ class _ChatScreenState extends State<ChatScreen> {
       final file = result.files.first;
       if (file.path == null) return;
 
-      final path = file.path!;
-      final inputType = _inferInputType(path);
-
       final attachment = FileAttachment(
-        path: path,
+        path: file.path!,
         name: file.name,
-        mimeType: _inferMimeType(path),
+        originalName: file.name,
+        mimeType: 'application/pdf',
         sizeBytes: file.size,
-        inputType: inputType,
+        inputType: 'pdf',
       );
       if (!mounted) return;
       context.read<ChatProvider>().setPendingAttachment(attachment);
     } catch (e) {
       if (mounted) {
-        _showTopSnackBar(context, 'Could not pick file');
+        _showTopSnackBar(context, 'Could not pick PDF file');
       }
     }
-  }
-
-  String _inferInputType(String path) {
-    final ext = path.toLowerCase();
-    if (ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
-        ext.endsWith('.png') || ext.endsWith('.gif') ||
-        ext.endsWith('.webp') || ext.endsWith('.bmp')) {
-      return 'image';
-    }
-    if (ext.endsWith('.pdf')) return 'pdf';
-    if (ext.endsWith('.mp4') || ext.endsWith('.mov') ||
-        ext.endsWith('.avi') || ext.endsWith('.mkv')) {
-      return 'video';
-    }
-    if (ext.endsWith('.mp3') || ext.endsWith('.wav') ||
-        ext.endsWith('.m4a') || ext.endsWith('.ogg')) {
-      return 'audio';
-    }
-    return 'file';
-  }
-
-  String _inferMimeType(String path) {
-    final ext = path.toLowerCase();
-    if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) return 'image/jpeg';
-    if (ext.endsWith('.png')) return 'image/png';
-    if (ext.endsWith('.gif')) return 'image/gif';
-    if (ext.endsWith('.webp')) return 'image/webp';
-    if (ext.endsWith('.pdf')) return 'application/pdf';
-    if (ext.endsWith('.mp4')) return 'video/mp4';
-    if (ext.endsWith('.mp3')) return 'audio/mpeg';
-    return 'application/octet-stream';
   }
 
   @override
@@ -689,7 +658,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       const SizedBox(width: 6),
                       Flexible(
                         child: Text(
-                          attachment.name,
+                          attachment.displayName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -760,15 +729,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 const SizedBox(width: 8),
                 Consumer<ChatProvider>(
                   builder: (context, chatProvider, _) {
+                    // Show stop button when sending, send button otherwise
                     return FloatingActionButton(
                       mini: true,
-                      onPressed: chatProvider.isSending ? null : _sendMessage,
+                      onPressed: chatProvider.isSending
+                          ? () => chatProvider.cancelResponse()
+                          : _sendMessage,
                       child: chatProvider.isSending
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
+                          ? const Icon(Icons.stop, size: 18)
                           : const Icon(Icons.send),
                     );
                   },
@@ -907,14 +875,26 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildChatTile(ChatProvider chatProvider, chat) {
+    final isGenerating = chatProvider.isChatGenerating(chat.id);
     return ListTile(
       dense: true,
-      leading: const Icon(Icons.chat_bubble_outline, size: 18),
+      leading: isGenerating
+          ? SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.chat_bubble_outline, size: 18),
       title: Text(
         chat.title,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 14),
+        style: TextStyle(
+          fontSize: 14,
+          color: isGenerating
+              ? Theme.of(context).colorScheme.primary
+              : null,
+        ),
       ),
       selected: chat.id == chatProvider.currentChatId,
       trailing: PopupMenuButton<String>(

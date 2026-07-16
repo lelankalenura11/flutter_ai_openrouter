@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.flutter_ai_chat_app_openrouter"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

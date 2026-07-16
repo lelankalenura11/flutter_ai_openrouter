@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 
 /// Compresses images in an isolate to avoid blocking the UI thread.
@@ -28,17 +29,8 @@ class FileCompressionService {
 
   /// Resize and compress raw image bytes (runs in isolate).
   static Uint8List _compressBytes(_CompressionParams params) {
-    // Use dart:ui decodeImageFromList + canvas resize
-    // Since we can't use dart:ui directly in an isolate easily,
-    // we use a simpler approach: if the image is large, we rely on
-    // the image_picker's built-in maxWidth/maxHeight or just return
-    // the original bytes with metadata signaling compression intent.
-    //
-    // For real compression, we'd use a package like 'image' (Dart native).
-    // For now, this returns the original bytes — the actual compression
-    // is handled at pick time via image_picker's imageQuality parameter.
-    //
-    // This service is a placeholder for future enhanced compression.
+    // Placeholder for future enhanced compression.
+    // Current compression is handled at pick time via image_picker's imageQuality.
     return params.bytes;
   }
 }
@@ -60,6 +52,7 @@ class _CompressionParams {
 class FileAttachment {
   final String path;
   final String name;
+  final String originalName; // Original file name (not the stored UUID path)
   final String mimeType;
   final int sizeBytes;
   final String inputType; // 'image', 'pdf', 'video', 'audio', 'file'
@@ -67,10 +60,14 @@ class FileAttachment {
   const FileAttachment({
     required this.path,
     required this.name,
+    this.originalName = '',
     required this.mimeType,
     required this.sizeBytes,
     required this.inputType,
   });
+
+  /// Get display name — prefer original name, fall back to storage name
+  String get displayName => originalName.isNotEmpty ? originalName : name;
 
   /// Determine if this attachment is an image type.
   bool get isImage => inputType == 'image';
