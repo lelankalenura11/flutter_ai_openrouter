@@ -10,6 +10,7 @@ class MessagesTable extends Table {
   IntColumn get inputTokens => integer().nullable()();
   IntColumn get outputTokens => integer().nullable()();
   TextColumn get reasoning => text().nullable()();
+  TextColumn get status => text().withDefault(const Constant('sent'))(); // 'sending', 'sent', 'failed'
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get editedAt => dateTime().nullable()();
 

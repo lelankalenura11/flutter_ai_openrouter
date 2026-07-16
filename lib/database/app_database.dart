@@ -14,7 +14,7 @@ import 'tables/settings_table.dart';
 
 part 'app_database.g.dart';
 
-// --- DAO-style helper classes (no code gen needed, just use the generated db) ---
+// --- DAO-style helper classes ---
 
 /// Convenience methods for folder operations
 extension FolderQueries on AppDatabase {
@@ -59,6 +59,24 @@ extension ChatQueries on AppDatabase {
   Future<void> deleteChat(String id) =>
       (delete(chatsTable)..where((t) => t.id.equals(id))).go();
 
+  Future<void> moveChatToFolder(String chatId, String? folderId) async {
+    await (update(chatsTable)..where((t) => t.id.equals(chatId))).write(
+      ChatsTableCompanion(
+        folderId: Value(folderId),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  Future<void> renameChat(String chatId, String title) async {
+    await (update(chatsTable)..where((t) => t.id.equals(chatId))).write(
+      ChatsTableCompanion(
+        title: Value(title),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
   Future<void> updateChatTokens(String chatId, int inputTokens, int outputTokens) async {
     await (update(chatsTable)..where((t) => t.id.equals(chatId))).write(
       ChatsTableCompanion(
@@ -89,12 +107,29 @@ extension MessageQueries on AppDatabase {
 
   Future<void> deleteMessage(String id) =>
       (delete(messagesTable)..where((t) => t.id.equals(id))).go();
+
+  Future<void> updateMessageStatus(String id, String status) async {
+    await (update(messagesTable)..where((t) => t.id.equals(id))).write(
+      MessagesTableCompanion(status: Value(status)),
+    );
+  }
+
+  /// Fork messages from a given point — copy all messages from `fromMessageId` onward into a new chat
+  Future<List<MessagesTableData>> forkMessages(
+      String fromMessageId, String sourceChatId) async {
+    final allMessages = await getMessages(sourceChatId);
+    final fromIndex = allMessages.indexWhere((m) => m.id == fromMessageId);
+    if (fromIndex == -1) return [];
+
+    final forkedData = allMessages.sublist(fromIndex);
+    // Return a deep copy with nulled IDs — the caller assigns new IDs
+    return forkedData;
+  }
 }
 
 /// Convenience methods for star operations
 extension StarQueries on AppDatabase {
-  Future<List<StarsTableData>> getStarredMessages() =>
-      select(starsTable).get();
+  Future<List<StarsTableData>> getAllStars() => select(starsTable).get();
 
   Future<StarsTableData?> getStar(String messageId) =>
       (select(starsTable)..where((t) => t.messageId.equals(messageId)))
@@ -110,6 +145,18 @@ extension StarQueries on AppDatabase {
         starredAt: Value(DateTime.now()),
       ));
     }
+  }
+
+  /// Get starred messages with their full data (join to messages table)
+  Future<List<MessagesTableData>> getStarredMessages() async {
+    final stars = await select(starsTable).get();
+    if (stars.isEmpty) return [];
+
+    final query = select(messagesTable)
+      ..where((t) => t.id.isIn(stars.map((s) => s.messageId).toList()))
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
+    final messages = await query.get();
+    return messages;
   }
 }
 
@@ -157,7 +204,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -221,6 +268,12 @@ class AppDatabase extends _$AppDatabase {
               isBuiltin: const Value(true),
               createdAt: Value(now),
             ));
+          }
+        },
+        onUpgrade: (Migrator m, int from, int to) async {
+          if (from < 2) {
+            // Add status column to messages
+            await m.addColumn(messagesTable, messagesTable.status);
           }
         },
       );

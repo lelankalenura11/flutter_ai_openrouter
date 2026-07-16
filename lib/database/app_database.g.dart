@@ -994,6 +994,16 @@ class $MessagesTableTable extends MessagesTable
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('sent'),
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -1027,6 +1037,7 @@ class $MessagesTableTable extends MessagesTable
     inputTokens,
     outputTokens,
     reasoning,
+    status,
     createdAt,
     editedAt,
   ];
@@ -1112,6 +1123,12 @@ class $MessagesTableTable extends MessagesTable
         reasoning.isAcceptableOrUnknown(data['reasoning']!, _reasoningMeta),
       );
     }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -1171,6 +1188,10 @@ class $MessagesTableTable extends MessagesTable
         DriftSqlType.string,
         data['${effectivePrefix}reasoning'],
       ),
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -1199,6 +1220,7 @@ class MessagesTableData extends DataClass
   final int? inputTokens;
   final int? outputTokens;
   final String? reasoning;
+  final String status;
   final DateTime createdAt;
   final DateTime? editedAt;
   const MessagesTableData({
@@ -1211,6 +1233,7 @@ class MessagesTableData extends DataClass
     this.inputTokens,
     this.outputTokens,
     this.reasoning,
+    required this.status,
     required this.createdAt,
     this.editedAt,
   });
@@ -1234,6 +1257,7 @@ class MessagesTableData extends DataClass
     if (!nullToAbsent || reasoning != null) {
       map['reasoning'] = Variable<String>(reasoning);
     }
+    map['status'] = Variable<String>(status);
     map['created_at'] = Variable<DateTime>(createdAt);
     if (!nullToAbsent || editedAt != null) {
       map['edited_at'] = Variable<DateTime>(editedAt);
@@ -1260,6 +1284,7 @@ class MessagesTableData extends DataClass
       reasoning: reasoning == null && nullToAbsent
           ? const Value.absent()
           : Value(reasoning),
+      status: Value(status),
       createdAt: Value(createdAt),
       editedAt: editedAt == null && nullToAbsent
           ? const Value.absent()
@@ -1282,6 +1307,7 @@ class MessagesTableData extends DataClass
       inputTokens: serializer.fromJson<int?>(json['inputTokens']),
       outputTokens: serializer.fromJson<int?>(json['outputTokens']),
       reasoning: serializer.fromJson<String?>(json['reasoning']),
+      status: serializer.fromJson<String>(json['status']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       editedAt: serializer.fromJson<DateTime?>(json['editedAt']),
     );
@@ -1299,6 +1325,7 @@ class MessagesTableData extends DataClass
       'inputTokens': serializer.toJson<int?>(inputTokens),
       'outputTokens': serializer.toJson<int?>(outputTokens),
       'reasoning': serializer.toJson<String?>(reasoning),
+      'status': serializer.toJson<String>(status),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'editedAt': serializer.toJson<DateTime?>(editedAt),
     };
@@ -1314,6 +1341,7 @@ class MessagesTableData extends DataClass
     Value<int?> inputTokens = const Value.absent(),
     Value<int?> outputTokens = const Value.absent(),
     Value<String?> reasoning = const Value.absent(),
+    String? status,
     DateTime? createdAt,
     Value<DateTime?> editedAt = const Value.absent(),
   }) => MessagesTableData(
@@ -1328,6 +1356,7 @@ class MessagesTableData extends DataClass
     inputTokens: inputTokens.present ? inputTokens.value : this.inputTokens,
     outputTokens: outputTokens.present ? outputTokens.value : this.outputTokens,
     reasoning: reasoning.present ? reasoning.value : this.reasoning,
+    status: status ?? this.status,
     createdAt: createdAt ?? this.createdAt,
     editedAt: editedAt.present ? editedAt.value : this.editedAt,
   );
@@ -1348,6 +1377,7 @@ class MessagesTableData extends DataClass
           ? data.outputTokens.value
           : this.outputTokens,
       reasoning: data.reasoning.present ? data.reasoning.value : this.reasoning,
+      status: data.status.present ? data.status.value : this.status,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       editedAt: data.editedAt.present ? data.editedAt.value : this.editedAt,
     );
@@ -1365,6 +1395,7 @@ class MessagesTableData extends DataClass
           ..write('inputTokens: $inputTokens, ')
           ..write('outputTokens: $outputTokens, ')
           ..write('reasoning: $reasoning, ')
+          ..write('status: $status, ')
           ..write('createdAt: $createdAt, ')
           ..write('editedAt: $editedAt')
           ..write(')'))
@@ -1382,6 +1413,7 @@ class MessagesTableData extends DataClass
     inputTokens,
     outputTokens,
     reasoning,
+    status,
     createdAt,
     editedAt,
   );
@@ -1398,6 +1430,7 @@ class MessagesTableData extends DataClass
           other.inputTokens == this.inputTokens &&
           other.outputTokens == this.outputTokens &&
           other.reasoning == this.reasoning &&
+          other.status == this.status &&
           other.createdAt == this.createdAt &&
           other.editedAt == this.editedAt);
 }
@@ -1412,6 +1445,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
   final Value<int?> inputTokens;
   final Value<int?> outputTokens;
   final Value<String?> reasoning;
+  final Value<String> status;
   final Value<DateTime> createdAt;
   final Value<DateTime?> editedAt;
   final Value<int> rowid;
@@ -1425,6 +1459,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
     this.inputTokens = const Value.absent(),
     this.outputTokens = const Value.absent(),
     this.reasoning = const Value.absent(),
+    this.status = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.editedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1439,6 +1474,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
     this.inputTokens = const Value.absent(),
     this.outputTokens = const Value.absent(),
     this.reasoning = const Value.absent(),
+    this.status = const Value.absent(),
     required DateTime createdAt,
     this.editedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1458,6 +1494,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
     Expression<int>? inputTokens,
     Expression<int>? outputTokens,
     Expression<String>? reasoning,
+    Expression<String>? status,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? editedAt,
     Expression<int>? rowid,
@@ -1472,6 +1509,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
       if (inputTokens != null) 'input_tokens': inputTokens,
       if (outputTokens != null) 'output_tokens': outputTokens,
       if (reasoning != null) 'reasoning': reasoning,
+      if (status != null) 'status': status,
       if (createdAt != null) 'created_at': createdAt,
       if (editedAt != null) 'edited_at': editedAt,
       if (rowid != null) 'rowid': rowid,
@@ -1488,6 +1526,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
     Value<int?>? inputTokens,
     Value<int?>? outputTokens,
     Value<String?>? reasoning,
+    Value<String>? status,
     Value<DateTime>? createdAt,
     Value<DateTime?>? editedAt,
     Value<int>? rowid,
@@ -1502,6 +1541,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
       inputTokens: inputTokens ?? this.inputTokens,
       outputTokens: outputTokens ?? this.outputTokens,
       reasoning: reasoning ?? this.reasoning,
+      status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
       editedAt: editedAt ?? this.editedAt,
       rowid: rowid ?? this.rowid,
@@ -1538,6 +1578,9 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
     if (reasoning.present) {
       map['reasoning'] = Variable<String>(reasoning.value);
     }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -1562,6 +1605,7 @@ class MessagesTableCompanion extends UpdateCompanion<MessagesTableData> {
           ..write('inputTokens: $inputTokens, ')
           ..write('outputTokens: $outputTokens, ')
           ..write('reasoning: $reasoning, ')
+          ..write('status: $status, ')
           ..write('createdAt: $createdAt, ')
           ..write('editedAt: $editedAt, ')
           ..write('rowid: $rowid')
@@ -3346,6 +3390,7 @@ typedef $$MessagesTableTableCreateCompanionBuilder =
       Value<int?> inputTokens,
       Value<int?> outputTokens,
       Value<String?> reasoning,
+      Value<String> status,
       required DateTime createdAt,
       Value<DateTime?> editedAt,
       Value<int> rowid,
@@ -3361,6 +3406,7 @@ typedef $$MessagesTableTableUpdateCompanionBuilder =
       Value<int?> inputTokens,
       Value<int?> outputTokens,
       Value<String?> reasoning,
+      Value<String> status,
       Value<DateTime> createdAt,
       Value<DateTime?> editedAt,
       Value<int> rowid,
@@ -3417,6 +3463,11 @@ class $$MessagesTableTableFilterComposer
 
   ColumnFilters<String> get reasoning => $composableBuilder(
     column: $table.reasoning,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3485,6 +3536,11 @@ class $$MessagesTableTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -3538,6 +3594,9 @@ class $$MessagesTableTableAnnotationComposer
   GeneratedColumn<String> get reasoning =>
       $composableBuilder(column: $table.reasoning, builder: (column) => column);
 
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 
@@ -3589,6 +3648,7 @@ class $$MessagesTableTableTableManager
                 Value<int?> inputTokens = const Value.absent(),
                 Value<int?> outputTokens = const Value.absent(),
                 Value<String?> reasoning = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime?> editedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -3602,6 +3662,7 @@ class $$MessagesTableTableTableManager
                 inputTokens: inputTokens,
                 outputTokens: outputTokens,
                 reasoning: reasoning,
+                status: status,
                 createdAt: createdAt,
                 editedAt: editedAt,
                 rowid: rowid,
@@ -3617,6 +3678,7 @@ class $$MessagesTableTableTableManager
                 Value<int?> inputTokens = const Value.absent(),
                 Value<int?> outputTokens = const Value.absent(),
                 Value<String?> reasoning = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 required DateTime createdAt,
                 Value<DateTime?> editedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -3630,6 +3692,7 @@ class $$MessagesTableTableTableManager
                 inputTokens: inputTokens,
                 outputTokens: outputTokens,
                 reasoning: reasoning,
+                status: status,
                 createdAt: createdAt,
                 editedAt: editedAt,
                 rowid: rowid,

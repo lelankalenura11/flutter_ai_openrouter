@@ -17,6 +17,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
@@ -24,13 +25,27 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ChatProvider>().loadChats();
     });
+    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
     _messageController.dispose();
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    final threshold = 200.0;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+    final isNearBottom = (maxScroll - currentScroll) < threshold;
+    if (isNearBottom != !_showScrollToBottom) {
+      setState(() {
+        _showScrollToBottom = !isNearBottom;
+      });
+    }
   }
 
   void _scrollToBottom() {
@@ -73,10 +88,8 @@ class _ChatScreenState extends State<ChatScreen> {
             if (chatProvider.currentChatId == null) {
               return const Text('AI Chat');
             }
-            final chat = chatProvider.chats
-                .where((c) => c.id == chatProvider.currentChatId)
-                .firstOrNull;
-              return Text(chat?.title ?? 'Chat');
+            final chat = chatProvider.currentChat;
+            return Text(chat?.title ?? 'Chat');
           },
         ),
         actions: [
@@ -96,130 +109,164 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       drawer: _buildChatListDrawer(context),
-      body: Column(
+      body: Stack(
         children: [
-          // Skill indicator
-          Consumer<ChatProvider>(
-            builder: (context, chatProvider, _) {
-              if (chatProvider.activeSkillPrompt == null) {
-                return const SizedBox.shrink();
-              }
-              return Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                color: theme.colorScheme.primaryContainer,
-                child: Row(
-                  children: [
-                    Icon(Icons.psychology,
-                        size: 14, color: theme.colorScheme.onPrimaryContainer),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Using skill: ${chatProvider.activeSkillId?.replaceAll('builtin_', '').replaceAll('_', ' ') ?? 'Custom'}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.colorScheme.onPrimaryContainer,
-                      ),
-                    ),
-                    const Spacer(),
-                    InkWell(
-                      onTap: () => chatProvider.setSkill(null, null),
-                      child: Icon(Icons.close,
-                          size: 14,
-                          color: theme.colorScheme.onPrimaryContainer),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-          // Messages
-          Expanded(
-            child: Consumer<ChatProvider>(
-              builder: (context, chatProvider, _) {
-                if (chatProvider.isLoading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (chatProvider.currentChatId == null) {
-                  return _buildWelcomeMessage(context);
-                }
-
-                final messages = chatProvider.messages;
-                if (messages.isEmpty) {
-                  return const Center(child: Text('Start a conversation!'));
-                }
-
-                final showThinking = chatProvider.isSending;
-                final itemCount = messages.length + (showThinking ? 1 : 0);
-                return ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.only(top: 8, bottom: 8),
-                  itemCount: itemCount,
-                  itemBuilder: (context, index) {
-                    if (index < messages.length) {
-                      final msg = messages[index];
-                      return MessageBubble(
-                        message: msg,
-                        onCopy: () {
-                          Clipboard.setData(ClipboardData(text: msg.content));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('Message copied'),
-                                duration: Duration(seconds: 1)),
-                          );
-                        },
-                        onStar: () async {
-                          await chatProvider._toggleStar(msg.id);
-                        },
-                      );
-                    }
-                    // Last item: thinking indicator
-                    return const ThinkingIndicator();
-                  },
-                );
-              },
-            ),
-          ),
-          // Error banner
-          Consumer<ChatProvider>(
-            builder: (context, chatProvider, _) {
-              if (chatProvider.error == null) {
-                return const SizedBox.shrink();
-              }
-              return Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                color: theme.colorScheme.errorContainer,
-                child: Row(
-                  children: [
-                    Icon(Icons.error_outline,
-                        size: 16, color: theme.colorScheme.onErrorContainer),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        chatProvider.error!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.onErrorContainer,
+          Column(
+            children: [
+              // Skill indicator
+              Consumer<ChatProvider>(
+                builder: (context, chatProvider, _) {
+                  if (chatProvider.activeSkillPrompt == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    color: theme.colorScheme.primaryContainer,
+                    child: Row(
+                      children: [
+                        Icon(Icons.psychology,
+                            size: 14, color: theme.colorScheme.onPrimaryContainer),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Using skill: ${chatProvider.activeSkillId?.replaceAll('builtin_', '').replaceAll('_', ' ') ?? 'Custom'}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.onPrimaryContainer,
+                          ),
                         ),
-                      ),
+                        const Spacer(),
+                        InkWell(
+                          onTap: () => chatProvider.setSkill(null, null),
+                          child: Icon(Icons.close,
+                              size: 14,
+                              color: theme.colorScheme.onPrimaryContainer),
+                        ),
+                      ],
                     ),
-                    InkWell(
-                      onTap: () => chatProvider._clearError(),
-                      child: Icon(Icons.close,
-                          size: 14,
-                          color: theme.colorScheme.onErrorContainer),
-                    ),
-                  ],
+                  );
+                },
+              ),
+              // Messages
+              Expanded(
+                child: Consumer<ChatProvider>(
+                  builder: (context, chatProvider, _) {
+                    if (chatProvider.isLoading) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (chatProvider.currentChatId == null) {
+                      return _buildWelcomeMessage(context);
+                    }
+
+                    final messages = chatProvider.messages;
+                    if (messages.isEmpty) {
+                      return const Center(child: Text('Start a conversation!'));
+                    }
+
+                    final showThinking = chatProvider.isSending;
+                    final itemCount = messages.length + (showThinking ? 1 : 0);
+                    return ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      itemCount: itemCount,
+                      itemBuilder: (context, index) {
+                        if (index < messages.length) {
+                          final msg = messages[index];
+                          final isFailed = msg.status == 'failed';
+                          return MessageBubble(
+                            message: msg,
+                            isStarred: chatProvider.isMessageStarred(msg.id),
+                            showRetry: isFailed && msg.role == 'user',
+                            onCopy: () {
+                              Clipboard.setData(ClipboardData(text: msg.content));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Message copied'),
+                                    duration: Duration(seconds: 1)),
+                              );
+                            },
+                            onStar: () => chatProvider.toggleStar(msg.id),
+                            onRetry: isFailed
+                                ? () => chatProvider.retryMessage(msg.id)
+                                : null,
+                            onFork: (msg.role == 'user' || msg.role == 'assistant')
+                                ? () => _forkChat(chatProvider, msg.id)
+                                : null,
+                          );
+                        }
+                        // Last item: thinking indicator
+                        return const ThinkingIndicator();
+                      },
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+              // Error banner
+              Consumer<ChatProvider>(
+                builder: (context, chatProvider, _) {
+                  if (chatProvider.error == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    color: theme.colorScheme.errorContainer,
+                    child: Row(
+                      children: [
+                        Icon(Icons.error_outline,
+                            size: 16, color: theme.colorScheme.onErrorContainer),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            chatProvider.error!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () => chatProvider.clearError(),
+                          child: Icon(Icons.close,
+                              size: 14,
+                              color: theme.colorScheme.onErrorContainer),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              // Input area
+              _buildInputArea(context),
+            ],
           ),
-          // Input area
-          _buildInputArea(context),
+          // Jump-to-bottom FAB
+          if (_showScrollToBottom)
+            Positioned(
+              right: 16,
+              bottom: 80,
+              child: FloatingActionButton.small(
+                heroTag: 'scrollToBottom',
+                onPressed: _scrollToBottom,
+                child: const Icon(Icons.arrow_downward),
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  Future<void> _forkChat(ChatProvider chatProvider, String messageId) async {
+    final newChatId = await chatProvider.forkChat(messageId);
+    if (newChatId != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Chat forked'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
   }
 
   Widget _buildWelcomeMessage(BuildContext context) {
@@ -313,6 +360,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // ========================================================================
+  // Drawer with folders, starred messages, and chat list
+  // ========================================================================
+
   Widget _buildChatListDrawer(BuildContext context) {
     return Drawer(
       child: Consumer<ChatProvider>(
@@ -345,6 +396,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
+              // New Chat
               ListTile(
                 leading: const Icon(Icons.add),
                 title: const Text('New Chat'),
@@ -353,25 +405,354 @@ class _ChatScreenState extends State<ChatScreen> {
                   chatProvider.createChat();
                 },
               ),
+              // Starred messages
+              ListTile(
+                leading: const Icon(Icons.star, color: Colors.amber),
+                title: const Text('Starred'),
+                trailing: chatProvider.starredMessages.isNotEmpty
+                    ? Chip(
+                        label: Text(
+                          '${chatProvider.starredMessages.length}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      )
+                    : null,
+                onTap: () {
+                  Navigator.pop(context);
+                  _showStarredMessages(context);
+                },
+              ),
               const Divider(),
-              ...chatProvider.chats.map((chat) => ListTile(
-                    leading: const Icon(Icons.chat_bubble_outline),
-                    title: Text(
-                      chat.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              // Folders section
+              ...chatProvider.folders.map((folder) => ExpansionTile(
+                    leading: const Icon(Icons.folder),
+                    title: Text(folder.name),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit, size: 16),
+                          onPressed: () =>
+                              _showRenameFolderDialog(context, folder.id, folder.name),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 16),
+                          onPressed: () {
+                            chatProvider.deleteFolder(folder.id);
+                            Navigator.pop(context);
+                          },
+                        ),
+                      ],
                     ),
-                    selected: chat.id == chatProvider.currentChatId,
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      onPressed: () => chatProvider.deleteChat(chat.id),
-                    ),
-                    onTap: () {
-                      Navigator.pop(context);
-                      chatProvider.selectChat(chat.id);
-                    },
+                    initiallyExpanded: false,
+                    children: chatProvider
+                        .getChatsByFolder(folder.id)
+                        .map((chat) => _buildChatTile(chatProvider, chat))
+                        .toList(),
                   )),
+              // Root folder (no folder) — only show if there are unfiled chats
+              if (chatProvider.getChatsByFolder(null).isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Text(
+                    'Unfiled',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ),
+                ...chatProvider
+                    .getChatsByFolder(null)
+                    .map((chat) => _buildChatTile(chatProvider, chat)),
+              ],
+              const Divider(),
+              // Add folder button
+              ListTile(
+                leading: const Icon(Icons.create_new_folder_outlined),
+                title: const Text('New Folder'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showCreateFolderDialog(context);
+                },
+              ),
             ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildChatTile(ChatProvider chatProvider, chat) {
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.chat_bubble_outline, size: 18),
+      title: Text(
+        chat.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 14),
+      ),
+      selected: chat.id == chatProvider.currentChatId,
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, size: 16),
+        onSelected: (value) {
+          if (value == 'rename') {
+            _showRenameChatDialog(context, chat.id, chat.title);
+          } else if (value == 'move') {
+            _showMoveChatDialog(context, chat.id, chat.folderId);
+          } else if (value == 'delete') {
+            if (chat.id == chatProvider.currentChatId) {
+              Navigator.pop(context);
+            }
+            chatProvider.deleteChat(chat.id);
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(value: 'rename', child: Text('Rename')),
+          const PopupMenuItem(value: 'move', child: Text('Move to folder')),
+          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+        ],
+      ),
+      onTap: () {
+        Navigator.pop(context);
+        chatProvider.selectChat(chat.id);
+      },
+    );
+  }
+
+  // ========================================================================
+  // Dialogs
+  // ========================================================================
+
+  void _showCreateFolderDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('New Folder'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Folder name',
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              context.read<ChatProvider>().createFolder(value.trim());
+              Navigator.pop(dialogContext);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                context.read<ChatProvider>().createFolder(controller.text.trim());
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRenameFolderDialog(BuildContext context, String id, String currentName) {
+    final controller = TextEditingController(text: currentName);
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename Folder'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Folder name',
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              context.read<ChatProvider>().renameFolder(id, value.trim());
+              Navigator.pop(dialogContext);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                context.read<ChatProvider>().renameFolder(id, controller.text.trim());
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRenameChatDialog(BuildContext context, String chatId, String currentTitle) {
+    final controller = TextEditingController(text: currentTitle);
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename Chat'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Chat title',
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              context.read<ChatProvider>().renameChat(chatId, value.trim());
+              Navigator.pop(dialogContext);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                context.read<ChatProvider>().renameChat(chatId, controller.text.trim());
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMoveChatDialog(BuildContext context, String chatId, String? currentFolderId) {
+    final chatProvider = context.read<ChatProvider>();
+    String? selectedFolderId = currentFolderId;
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => SimpleDialog(
+          title: const Text('Move to folder'),
+          children: [
+            // No folder (unfiled)
+            RadioListTile<String?>(
+              title: const Text('No folder'),
+              value: null,
+              groupValue: selectedFolderId,
+              onChanged: (value) {
+                setDialogState(() => selectedFolderId = value);
+              },
+            ),
+            // Existing folders
+            ...chatProvider.folders.map(
+              (folder) => RadioListTile<String?>(
+                title: Text(folder.name),
+                value: folder.id,
+                groupValue: selectedFolderId,
+                onChanged: (value) {
+                  setDialogState(() => selectedFolderId = value);
+                },
+              ),
+            ),
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: FilledButton(
+                onPressed: () {
+                  chatProvider.moveChatToFolder(chatId, selectedFolderId);
+                  Navigator.pop(dialogContext);
+                },
+                child: const Text('Move'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showStarredMessages(BuildContext context) {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => Consumer<ChatProvider>(
+        builder: (context, chatProvider, _) {
+          final starred = chatProvider.starredMessages;
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.6,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text('Starred Messages', style: theme.textTheme.titleLarge),
+                const Divider(),
+                Expanded(
+                  child: starred.isEmpty
+                      ? Center(
+                          child: Text(
+                            'No starred messages yet',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: starred.length,
+                          itemBuilder: (context, index) {
+                            final msg = starred[index];
+                            return Card(
+                              child: ListTile(
+                                title: Text(
+                                  msg.content,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  msg.role == 'user' ? 'You' : 'AI',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.star, color: Colors.amber),
+                                  onPressed: () => chatProvider.toggleStar(msg.id),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
           );
         },
       ),
@@ -388,9 +769,4 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (_) => const SkillsSheet(),
     );
   }
-}
-
-extension ChatProviderPrivate on ChatProvider {
-  Future<void> _toggleStar(String messageId) => toggleStar(messageId);
-  void _clearError() => clearError();
 }

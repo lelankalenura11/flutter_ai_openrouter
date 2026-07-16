@@ -8,6 +8,9 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onCopy;
   final VoidCallback? onStar;
   final bool isStarred;
+  final bool showRetry;
+  final VoidCallback? onRetry;
+  final VoidCallback? onFork;
 
   const MessageBubble({
     super.key,
@@ -16,6 +19,9 @@ class MessageBubble extends StatelessWidget {
     this.onCopy,
     this.onStar,
     this.isStarred = false,
+    this.showRetry = false,
+    this.onRetry,
+    this.onFork,
   });
 
   @override
@@ -86,6 +92,44 @@ class MessageBubble extends StatelessWidget {
                             ? theme.colorScheme.onPrimary
                             : theme.colorScheme.primary,
                       ),
+                      // Failed state
+                      if (showRetry)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.error_outline,
+                                size: 14,
+                                color: theme.colorScheme.error,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Failed to send',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              if (onRetry != null)
+                                TextButton.icon(
+                                  onPressed: onRetry,
+                                  icon: const Icon(Icons.refresh, size: 14),
+                                  label: const Text('Retry',
+                                      style: TextStyle(fontSize: 11)),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       // Token count
                       if (showTokenCount &&
                           isAssistant &&
@@ -115,6 +159,15 @@ class MessageBubble extends StatelessWidget {
                       IconButton(
                         icon: const Icon(Icons.copy, size: 16),
                         onPressed: onCopy,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                            minWidth: 32, minHeight: 32),
+                      ),
+                    if (onFork != null)
+                      IconButton(
+                        icon: const Icon(Icons.call_split, size: 16),
+                        tooltip: 'Fork chat from this message',
+                        onPressed: onFork,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(
                             minWidth: 32, minHeight: 32),
