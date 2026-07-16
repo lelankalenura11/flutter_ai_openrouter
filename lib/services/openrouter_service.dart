@@ -1,7 +1,17 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_ai_chat_app_openrouter/config/constants.dart';
 import '../services/auth_service.dart';
+
+/// Represents a single content part in a multimodal message.
+class ContentPart {
+  final String type; // 'text' or 'image_url'
+  final String? text;
+  final String? imageUrl; // base64 data URL or URL
+
+  const ContentPart({required this.type, this.text, this.imageUrl});
+}
 
 class OpenRouterService {
   final AuthService _authService;
@@ -34,7 +44,11 @@ class OpenRouterService {
     }
   }
 
-  /// Send a chat completion request to OpenRouter
+  /// Send a chat completion request to OpenRouter.
+  ///
+  /// [messages] should follow the standard OpenRouter format.
+  /// For multimodal messages, the content field can be a String (plain text)
+  /// or a List<Map> of content parts (text + image_url).
   Future<OpenRouterResponse> sendChatMessage({
     required String model,
     required List<Map<String, dynamic>> messages,
@@ -52,8 +66,8 @@ class OpenRouterService {
       final body = <String, dynamic>{
         'model': model,
         'messages': messages,
-        'max_tokens': ?maxTokens,
-        'temperature': ?temperature,
+        'max_tokens': maxTokens,
+        'temperature': temperature,
         if (includeReasoning == true) 'include_reasoning': true,
         if (includeReasoning == true) 'reasoning': {'max_tokens': 2048},
       };
@@ -76,6 +90,54 @@ class OpenRouterService {
     } catch (e) {
       return OpenRouterResponse.error('Network error: $e');
     }
+  }
+
+  /// Build a multimodal content array from text and an optional attachment.
+  ///
+  /// For images, encodes the file as a base64 data URL.
+  /// For other file types, returns the text only (file types are sent as text
+  /// context; actual file upload is not supported by OpenRouter chat completions).
+  static List<Map<String, dynamic>> buildMultimodalContent({
+    required String text,
+    String? attachmentPath,
+    String? inputType,
+  }) {
+    final parts = <Map<String, dynamic>>[];
+
+    // Add text part
+    if (text.isNotEmpty) {
+      parts.add({'type': 'text', 'text': text});
+    }
+
+    // Add image part if present
+    if (attachmentPath != null && inputType == 'image') {
+      try {
+        final file = File(attachmentPath);
+        if (file.existsSync()) {
+          final bytes = file.readAsBytesSync();
+          final base64 = base64Encode(bytes);
+          final ext = attachmentPath.toLowerCase();
+          String mimeType = 'image/jpeg';
+          if (ext.endsWith('.png')) mimeType = 'image/png';
+          if (ext.endsWith('.gif')) mimeType = 'image/gif';
+          if (ext.endsWith('.webp')) mimeType = 'image/webp';
+
+          parts.add({
+            'type': 'image_url',
+            'image_url': {'url': 'data:$mimeType;base64,$base64'},
+          });
+        }
+      } catch (e) {
+        // If file can't be read, just send text
+      }
+    }
+
+    // If no parts were added (shouldn't happen), return a text fallback
+    if (parts.isEmpty) {
+      parts.add({'type': 'text', 'text': text});
+    }
+
+    return parts;
   }
 }
 

@@ -1,4 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Permissions for camera and media access -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- Android 13+ granular media permissions -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
     <application
         android:label="flutter_ai_chat_app_openrouter"
         android:name="${applicationName}"

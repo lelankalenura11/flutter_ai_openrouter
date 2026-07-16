@@ -1,11 +1,15 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/thinking_indicator.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
 
 /// Helper to show a top-of-screen notification banner
 void _showTopSnackBar(BuildContext context, String message) {
@@ -175,15 +179,204 @@ class _ChatScreenState extends State<ChatScreen> {
     final chatProvider = context.read<ChatProvider>();
     _messageController.clear();
 
-    if (chatProvider.currentChatId == null) {
-      final id = await chatProvider.createChat(
-        skillId: chatProvider.activeSkillId,
-      );
-      if (id == null) return;
-    }
-
     await chatProvider.sendMessage(text);
     _scrollToBottom();
+  }
+
+  // ========================================================================
+  // Attachment handling
+  // ========================================================================
+
+  /// Show bottom sheet for picking an attachment source.
+  void _showAttachmentPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Attach file',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _AttachmentOption(
+                    icon: Icons.camera_alt,
+                    label: 'Camera',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _pickFromCamera();
+                    },
+                  ),
+                  _AttachmentOption(
+                    icon: Icons.photo_library,
+                    label: 'Gallery',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _pickFromGallery();
+                    },
+                  ),
+                  _AttachmentOption(
+                    icon: Icons.insert_drive_file,
+                    label: 'File',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _pickFile();
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Pick an image from the camera.
+  /// ImagePicker handles the native camera permission dialog automatically.
+  Future<void> _pickFromCamera() async {
+    try {
+      final picker = ImagePicker();
+      final xfile = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+      );
+      if (xfile == null) return;
+
+      final file = File(xfile.path);
+      final attachment = FileAttachment(
+        path: xfile.path,
+        name: xfile.name,
+        mimeType: 'image/jpeg',
+        sizeBytes: await file.length(),
+        inputType: 'image',
+      );
+      if (!mounted) return;
+      context.read<ChatProvider>().setPendingAttachment(attachment);
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(context, 'Could not open camera. Check camera permissions in Settings.');
+      }
+    }
+  }
+
+  /// Pick an image from the gallery.
+  /// ImagePicker handles the native gallery permission dialog automatically.
+  Future<void> _pickFromGallery() async {
+    try {
+      final picker = ImagePicker();
+      final xfile = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+      );
+      if (xfile == null) return;
+
+      final file = File(xfile.path);
+      final attachment = FileAttachment(
+        path: xfile.path,
+        name: xfile.name,
+        mimeType: 'image/jpeg',
+        sizeBytes: await file.length(),
+        inputType: 'image',
+      );
+      if (!mounted) return;
+      context.read<ChatProvider>().setPendingAttachment(attachment);
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(context, 'Could not open gallery. Check storage permissions in Settings.');
+      }
+    }
+  }
+
+  /// Pick any file type.
+  /// FilePicker handles its own permissions natively.
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      if (file.path == null) return;
+
+      final path = file.path!;
+      final inputType = _inferInputType(path);
+
+      final attachment = FileAttachment(
+        path: path,
+        name: file.name,
+        mimeType: _inferMimeType(path),
+        sizeBytes: file.size,
+        inputType: inputType,
+      );
+      if (!mounted) return;
+      context.read<ChatProvider>().setPendingAttachment(attachment);
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(context, 'Could not pick file');
+      }
+    }
+  }
+
+  String _inferInputType(String path) {
+    final ext = path.toLowerCase();
+    if (ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
+        ext.endsWith('.png') || ext.endsWith('.gif') ||
+        ext.endsWith('.webp') || ext.endsWith('.bmp')) {
+      return 'image';
+    }
+    if (ext.endsWith('.pdf')) return 'pdf';
+    if (ext.endsWith('.mp4') || ext.endsWith('.mov') ||
+        ext.endsWith('.avi') || ext.endsWith('.mkv')) {
+      return 'video';
+    }
+    if (ext.endsWith('.mp3') || ext.endsWith('.wav') ||
+        ext.endsWith('.m4a') || ext.endsWith('.ogg')) {
+      return 'audio';
+    }
+    return 'file';
+  }
+
+  String _inferMimeType(String path) {
+    final ext = path.toLowerCase();
+    if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) return 'image/jpeg';
+    if (ext.endsWith('.png')) return 'image/png';
+    if (ext.endsWith('.gif')) return 'image/gif';
+    if (ext.endsWith('.webp')) return 'image/webp';
+    if (ext.endsWith('.pdf')) return 'application/pdf';
+    if (ext.endsWith('.mp4')) return 'video/mp4';
+    if (ext.endsWith('.mp3')) return 'audio/mpeg';
+    return 'application/octet-stream';
   }
 
   @override
@@ -466,45 +659,121 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
       child: SafeArea(
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                textInputAction: TextInputAction.send,
-                maxLines: 4,
-                minLines: 1,
-                decoration: InputDecoration(
-                  hintText: 'Type a message...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  filled: true,
-                  fillColor: theme.colorScheme.surfaceContainerHighest,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                ),
-                onSubmitted: (_) => _sendMessage(),
-              ),
-            ),
-            const SizedBox(width: 8),
+            // Attachment preview chip
             Consumer<ChatProvider>(
               builder: (context, chatProvider, _) {
-                return FloatingActionButton(
-                  mini: true,
-                  onPressed: chatProvider.isSending ? null : _sendMessage,
-                  child: chatProvider.isSending
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.send),
+                final attachment = chatProvider.pendingAttachment;
+                if (attachment == null) return const SizedBox.shrink();
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        attachment.isImage
+                            ? Icons.image
+                            : attachment.isPdf
+                                ? Icons.picture_as_pdf
+                                : Icons.insert_drive_file,
+                        size: 16,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          attachment.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        attachment.formattedSize,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      InkWell(
+                        onTap: () => chatProvider.clearPendingAttachment(),
+                        child: Icon(
+                          Icons.close,
+                          size: 14,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ),
                 );
               },
+            ),
+            // Text input + buttons
+            Row(
+              children: [
+                // Attachment button
+                Consumer<ChatProvider>(
+                  builder: (context, chatProvider, _) {
+                    return IconButton(
+                      icon: const Icon(Icons.attach_file),
+                      tooltip: 'Attach file',
+                      onPressed: chatProvider.isSending
+                          ? null
+                          : () => _showAttachmentPicker(context),
+                    );
+                  },
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    textInputAction: TextInputAction.send,
+                    maxLines: 4,
+                    minLines: 1,
+                    decoration: InputDecoration(
+                      hintText: 'Type a message...',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor: theme.colorScheme.surfaceContainerHighest,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                    ),
+                    onSubmitted: (_) => _sendMessage(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Consumer<ChatProvider>(
+                  builder: (context, chatProvider, _) {
+                    return FloatingActionButton(
+                      mini: true,
+                      onPressed: chatProvider.isSending ? null : _sendMessage,
+                      child: chatProvider.isSending
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.send),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),
@@ -973,6 +1242,46 @@ class _ChatScreenState extends State<ChatScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => const SkillsSheet(),
+    );
+  }
+}
+
+/// A circular option button in the attachment picker sheet.
+class _AttachmentOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _AttachmentOption({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CircleAvatar(
+          radius: 28,
+          backgroundColor: theme.colorScheme.primaryContainer,
+          child: IconButton(
+            icon: Icon(icon, size: 24),
+            color: theme.colorScheme.onPrimaryContainer,
+            onPressed: onTap,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+      ],
     );
   }
 }

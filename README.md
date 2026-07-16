@@ -92,7 +92,7 @@ These are documented in the [suggested build order](https://github.com/lelankale
 
 | Phase | Feature | Status |
 |---|---|---|
-| 3 | File & image input (picker, compression, isolate processing) | 📅 Planned |
+| 3 | File & image input (picker, compression, isolate processing) | ✅ Done (v0.3.0) |
 | 4 | Audio recording + transcription (OpenRouter endpoint) | 📅 Planned |
 | 5 | Scanned PDF + video via vision models | 📅 Planned |
 | 6 | Export/import (versioned zip manifest + media folder) | 📅 Planned |

@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// Maps raw error strings to user-friendly messages
 String _friendlyError(dynamic error) {
@@ -63,6 +66,9 @@ class ChatProvider extends ChangeNotifier {
   // Failed message IDs that can be retried
   Set<String> _failedMessageIds = {};
 
+  // Pending attachment (set by chat_screen before sending)
+  FileAttachment? _pendingAttachment;
+
   // Getters
   List<ChatsTableData> get chats => _chats;
   List<MessagesTableData> get messages => _messages;
@@ -77,12 +83,38 @@ class ChatProvider extends ChangeNotifier {
   List<MessagesTableData> get starredMessages => _starredMessages;
   List<StarredMessageInfo> get starredWithChatInfo => _starredWithChatInfo;
   Set<String> get failedMessageIds => _failedMessageIds;
+  FileAttachment? get pendingAttachment => _pendingAttachment;
 
   ChatProvider(this._db, this._openRouterService);
 
   ChatsTableData? get currentChat {
     if (_currentChatId == null) return null;
     return _chats.where((c) => c.id == _currentChatId).firstOrNull;
+  }
+
+  /// Set a pending attachment that will be sent with the next message.
+  void setPendingAttachment(FileAttachment? attachment) {
+    _pendingAttachment = attachment;
+    notifyListeners();
+  }
+
+  /// Clear the pending attachment without sending.
+  void clearPendingAttachment() {
+    _pendingAttachment = null;
+    notifyListeners();
+  }
+
+  /// Copies the attachment file to app-local storage for persistence.
+  Future<String> _storeAttachmentLocally(String sourcePath, String inputType) async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final attachDir = Directory('${appDir.path}/attachments');
+    if (!attachDir.existsSync()) {
+      attachDir.createSync(recursive: true);
+    }
+    final ext = sourcePath.split('.').last;
+    final destPath = '${attachDir.path}/${_uuid.v4()}.$ext';
+    await File(sourcePath).copy(destPath);
+    return destPath;
   }
 
   // ========================================================================
@@ -397,7 +429,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   // ========================================================================
-  // Send message with friendly errors & retry
+  // Send message with friendly errors, retry & attachment support
   // ========================================================================
 
   void clearError() {
@@ -412,16 +444,36 @@ class ChatProvider extends ChangeNotifier {
     await sendMessage(msg.content, messageIdToReplace: messageId);
   }
 
-  /// Send a message. If [messageIdToReplace] is provided, it updates that message's content
+  /// Send a message, optionally with a file attachment.
+  ///
+  /// If [messageIdToReplace] is provided, it updates that message's content
   /// instead of creating a new one (used for retry).
-  Future<void> sendMessage(String text, {String? messageIdToReplace}) async {
-    if (_currentChatId == null || text.isEmpty) return;
+  Future<void> sendMessage(
+    String text, {
+    String? messageIdToReplace,
+    FileAttachment? attachment,
+  }) async {
+    if (_currentChatId == null && text.isEmpty && attachment == null) return;
+
+    // Use pending attachment if none provided directly
+    final effectiveAttachment = attachment ?? _pendingAttachment;
 
     _isSending = true;
     _error = null;
     notifyListeners();
 
     try {
+      // Ensure a chat exists if we're sending a first message
+      if (_currentChatId == null) {
+        final id = await createChat(skillId: _activeSkillId);
+        if (id == null) {
+          _error = 'Failed to create chat';
+          _isSending = false;
+          notifyListeners();
+          return;
+        }
+      }
+
       // Get settings for model params
       final settings = await _db.getSettings();
       final model = settings?.openrouterModel ?? 'openai/gpt-4o';
@@ -430,6 +482,17 @@ class ChatProvider extends ChangeNotifier {
 
       final now = DateTime.now();
       String userMsgId;
+
+      // Store attachment locally if present
+      String? storedAttachmentPath;
+      String inputType = 'text';
+      if (effectiveAttachment != null) {
+        storedAttachmentPath = await _storeAttachmentLocally(
+          effectiveAttachment.path,
+          effectiveAttachment.inputType,
+        );
+        inputType = effectiveAttachment.inputType;
+      }
 
       if (messageIdToReplace != null) {
         // Retry: update the existing failed message status to 'sending'
@@ -449,7 +512,8 @@ class ChatProvider extends ChangeNotifier {
           chatId: Value(_currentChatId!),
           role: const Value('user'),
           content: Value(text),
-          inputType: const Value('text'),
+          inputType: Value(inputType),
+          attachmentPath: Value(storedAttachmentPath),
           status: const Value('sending'),
           createdAt: Value(now),
         );
@@ -461,8 +525,8 @@ class ChatProvider extends ChangeNotifier {
           chatId: _currentChatId!,
           role: 'user',
           content: text,
-          inputType: 'text',
-          attachmentPath: null,
+          inputType: inputType,
+          attachmentPath: storedAttachmentPath,
           inputTokens: null,
           outputTokens: null,
           reasoning: null,
@@ -470,6 +534,12 @@ class ChatProvider extends ChangeNotifier {
           createdAt: now,
           editedAt: null,
         ));
+        notifyListeners();
+      }
+
+      // Clear pending attachment after using it
+      if (_pendingAttachment != null) {
+        _pendingAttachment = null;
         notifyListeners();
       }
 
@@ -489,10 +559,35 @@ class ChatProvider extends ChangeNotifier {
 
       for (final msg in _messages) {
         if (msg.status == 'failed') continue; // Don't include failed messages
-        apiMessages.add({
-          'role': msg.role,
-          'content': msg.content,
-        });
+
+        // For messages with image attachments, use multimodal content format
+        if (msg.attachmentPath != null && (msg.inputType == 'image' || msg.inputType == 'video')) {
+          final content = OpenRouterService.buildMultimodalContent(
+            text: msg.content,
+            attachmentPath: msg.attachmentPath,
+            inputType: msg.inputType,
+          );
+          apiMessages.add({
+            'role': msg.role,
+            'content': content,
+          });
+        } else if (msg.attachmentPath != null && msg.inputType == 'pdf') {
+          // For PDFs, send a text note about the attached file
+          final content = OpenRouterService.buildMultimodalContent(
+            text: '${msg.content}\n\n[Attached PDF file available locally: ${msg.attachmentPath}]',
+            attachmentPath: null,
+          );
+          apiMessages.add({
+            'role': msg.role,
+            'content': content,
+          });
+        } else {
+          // Plain text message
+          apiMessages.add({
+            'role': msg.role,
+            'content': msg.content,
+          });
+        }
       }
 
       // Call OpenRouter
@@ -569,7 +664,6 @@ class ChatProvider extends ChangeNotifier {
           _autoTitleChat(_currentChatId!, text, response.content ?? '');
         } else if (chat.title == 'Forked chat') {
           // For forked chats, only auto-title on the SECOND response
-          // (after user's first follow-up message in the forked conversation)
           final existingAssistantCount = _messages
               .where((m) => m.role == 'assistant' && m.id != assistantId)
               .length;

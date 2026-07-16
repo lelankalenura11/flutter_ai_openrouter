@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
+import 'package:flutter_ai_chat_app_openrouter/widgets/attachment_bubble.dart';
 
 class MessageBubble extends StatelessWidget {
   final MessagesTableData message;
@@ -31,6 +32,7 @@ class MessageBubble extends StatelessWidget {
     final isUser = message.role == 'user';
     final isAssistant = message.role == 'assistant';
     final theme = Theme.of(context);
+    final hasAttachment = message.attachmentPath != null && message.inputType != 'text';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -87,18 +89,26 @@ class MessageBubble extends StatelessWidget {
                           message.reasoning != null &&
                           message.reasoning!.isNotEmpty)
                         _ReasoningToggle(reasoning: message.reasoning!),
-                      // Content
-                      RichContent(
-                        content: message.content,
-                        textStyle: TextStyle(
-                          color: isUser
-                              ? theme.colorScheme.onPrimary
-                              : theme.colorScheme.onSurface,
+                      // Attachment preview (image, PDF, file)
+                      if (hasAttachment)
+                        AttachmentBubble(
+                          attachmentPath: message.attachmentPath!,
+                          inputType: message.inputType,
+                          isUser: isUser,
                         ),
-                        mathColor: isUser
-                            ? theme.colorScheme.onPrimary
-                            : theme.colorScheme.primary,
-                      ),
+                      // Content text
+                      if (message.content.isNotEmpty)
+                        RichContent(
+                          content: message.content,
+                          textStyle: TextStyle(
+                            color: isUser
+                                ? theme.colorScheme.onPrimary
+                                : theme.colorScheme.onSurface,
+                          ),
+                          mathColor: isUser
+                              ? theme.colorScheme.onPrimary
+                              : theme.colorScheme.primary,
+                        ),
                       // Failed state
                       if (showRetry)
                         Padding(
