@@ -7,6 +7,35 @@ import 'package:flutter_ai_chat_app_openrouter/widgets/thinking_indicator.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 
+/// Helper to show a top-of-screen notification banner
+void _showTopSnackBar(BuildContext context, String message) {
+  final overlay = Overlay.of(context);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (context) => Positioned(
+      top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+      left: 16,
+      right: 16,
+      child: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(8),
+        color: Theme.of(context).colorScheme.inverseSurface,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Text(
+            message,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onInverseSurface,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+  Future.delayed(const Duration(seconds: 2), () => entry.remove());
+}
+
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -17,7 +46,14 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _searchController = TextEditingController();
   bool _showScrollToBottom = false;
+
+  // Search state
+  bool _isSearching = false;
+  List<int> _searchMatchIndices = [];
+  int _currentSearchIndex = -1;
+  final _searchFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -33,6 +69,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -60,6 +98,76 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _toggleSearch() {
+    setState(() {
+      _isSearching = !_isSearching;
+      if (!_isSearching) {
+        _searchController.clear();
+        _searchMatchIndices = [];
+        _currentSearchIndex = -1;
+      } else {
+        _searchFocusNode.requestFocus();
+      }
+    });
+  }
+
+  void _onSearchChanged(String query) {
+    final chatProvider = context.read<ChatProvider>();
+    final messages = chatProvider.messages;
+    if (query.isEmpty || messages.isEmpty) {
+      setState(() {
+        _searchMatchIndices = [];
+        _currentSearchIndex = -1;
+      });
+      return;
+    }
+
+    final lowerQuery = query.toLowerCase();
+    final indices = <int>[];
+    for (int i = 0; i < messages.length; i++) {
+      if (messages[i].content.toLowerCase().contains(lowerQuery)) {
+        indices.add(i);
+      }
+    }
+
+    setState(() {
+      _searchMatchIndices = indices;
+      _currentSearchIndex = indices.isNotEmpty ? 0 : -1;
+    });
+
+    if (indices.isNotEmpty) {
+      _scrollToMessage(indices[0]);
+    }
+  }
+
+  void _scrollToMessage(int messageIndex) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        final offset = messageIndex * 80.0; // approximate item height
+        _scrollController.animateTo(
+          offset.clamp(0.0, _scrollController.position.maxScrollExtent),
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _nextSearchMatch() {
+    if (_searchMatchIndices.isEmpty) return;
+    final nextIndex = (_currentSearchIndex + 1) % _searchMatchIndices.length;
+    setState(() => _currentSearchIndex = nextIndex);
+    _scrollToMessage(_searchMatchIndices[nextIndex]);
+  }
+
+  void _prevSearchMatch() {
+    if (_searchMatchIndices.isEmpty) return;
+    final prevIndex = (_currentSearchIndex - 1 + _searchMatchIndices.length) %
+        _searchMatchIndices.length;
+    setState(() => _currentSearchIndex = prevIndex);
+    _scrollToMessage(_searchMatchIndices[prevIndex]);
+  }
+
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
@@ -82,32 +190,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: Consumer<ChatProvider>(
-          builder: (context, chatProvider, _) {
-            if (chatProvider.currentChatId == null) {
-              return const Text('AI Chat');
-            }
-            final chat = chatProvider.currentChat;
-            return Text(chat?.title ?? 'Chat');
-          },
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.psychology_outlined),
-            tooltip: 'Skills',
-            onPressed: () => _showSkillsDrawer(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Settings',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
-        ],
-      ),
+      appBar: _isSearching ? _buildSearchAppBar(theme) : _buildNormalAppBar(theme),
       drawer: _buildChatListDrawer(context),
       body: Stack(
         children: [
@@ -174,17 +257,17 @@ class _ChatScreenState extends State<ChatScreen> {
                         if (index < messages.length) {
                           final msg = messages[index];
                           final isFailed = msg.status == 'failed';
+                          final isSearchHighlight = _isSearching &&
+                              _searchMatchIndices.contains(index) &&
+                              _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
                           return MessageBubble(
                             message: msg,
                             isStarred: chatProvider.isMessageStarred(msg.id),
                             showRetry: isFailed && msg.role == 'user',
+                            highlight: isSearchHighlight,
                             onCopy: () {
                               Clipboard.setData(ClipboardData(text: msg.content));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text('Message copied'),
-                                    duration: Duration(seconds: 1)),
-                              );
+                              _showTopSnackBar(context, 'Message copied');
                             },
                             onStar: () => chatProvider.toggleStar(msg.id),
                             onRetry: isFailed
@@ -257,15 +340,84 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  PreferredSizeWidget _buildNormalAppBar(ThemeData theme) {
+    return AppBar(
+      title: Consumer<ChatProvider>(
+        builder: (context, chatProvider, _) {
+          if (chatProvider.currentChatId == null) {
+            return const Text('AI Chat');
+          }
+          final chat = chatProvider.currentChat;
+          return Text(chat?.title ?? 'Chat');
+        },
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          tooltip: 'Search',
+          onPressed: _toggleSearch,
+        ),
+        IconButton(
+          icon: const Icon(Icons.psychology_outlined),
+          tooltip: 'Skills',
+          onPressed: () => _showSkillsDrawer(context),
+        ),
+        IconButton(
+          icon: const Icon(Icons.settings),
+          tooltip: 'Settings',
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const SettingsScreen()),
+          ),
+        ),
+      ],
+    );
+  }
+
+  PreferredSizeWidget _buildSearchAppBar(ThemeData theme) {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _toggleSearch,
+      ),
+      title: TextField(
+        controller: _searchController,
+        focusNode: _searchFocusNode,
+        autofocus: true,
+        decoration: InputDecoration(
+          hintText: 'Search messages...',
+          border: InputBorder.none,
+          fillColor: theme.colorScheme.surfaceContainerHighest,
+          filled: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+        onChanged: _onSearchChanged,
+      ),
+      actions: [
+        if (_searchMatchIndices.isNotEmpty) ...[
+          Center(
+            child: Text(
+              '${_currentSearchIndex + 1} of ${_searchMatchIndices.length}',
+              style: const TextStyle(fontSize: 14),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.arrow_upward),
+            onPressed: _prevSearchMatch,
+          ),
+          IconButton(
+            icon: const Icon(Icons.arrow_downward),
+            onPressed: _nextSearchMatch,
+          ),
+        ],
+      ],
+    );
+  }
+
   Future<void> _forkChat(ChatProvider chatProvider, String messageId) async {
     final newChatId = await chatProvider.forkChat(messageId);
     if (newChatId != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Chat forked'),
-          duration: Duration(seconds: 1),
-        ),
-      );
+      _showTopSnackBar(context, 'Chat forked');
     }
   }
 
@@ -524,6 +676,134 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // ========================================================================
+  // Starred messages — WhatsApp style
+  // ========================================================================
+
+  void _showStarredMessages(BuildContext context) {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => Consumer<ChatProvider>(
+        builder: (context, chatProvider, _) {
+          final starredList = chatProvider.starredWithChatInfo;
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.7,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Text('Starred Messages', style: theme.textTheme.titleLarge),
+                    const Spacer(),
+                    Text(
+                      '${starredList.length} messages',
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(),
+                Expanded(
+                  child: starredList.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.star_border, size: 48,
+                                  color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No starred messages yet',
+                                style: TextStyle(
+                                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: starredList.length,
+                          itemBuilder: (context, index) {
+                            final info = starredList[index];
+                            final msg = info.message;
+                            return Card(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              child: ListTile(
+                                leading: CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: msg.role == 'user'
+                                      ? theme.colorScheme.primary
+                                      : theme.colorScheme.primaryContainer,
+                                  child: Icon(
+                                    msg.role == 'user' ? Icons.person : Icons.smart_toy_outlined,
+                                    size: 18,
+                                    color: msg.role == 'user'
+                                        ? theme.colorScheme.onPrimary
+                                        : theme.colorScheme.onPrimaryContainer,
+                                  ),
+                                ),
+                                title: Text(
+                                  msg.content,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                subtitle: Text(
+                                  '${msg.role == 'user' ? 'You' : 'AI'} · ${info.chatTitle}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.open_in_new, size: 18),
+                                      tooltip: 'Go to chat',
+                                      onPressed: () {
+                                        Navigator.pop(context); // close starred
+                                        chatProvider.selectChat(msg.chatId);
+                                      },
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.star, color: Colors.amber),
+                                      onPressed: () => chatProvider.toggleStar(msg.id),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ========================================================================
   // Dialogs
   // ========================================================================
 
@@ -650,7 +930,6 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (context, setDialogState) => SimpleDialog(
           title: const Text('Move to folder'),
           children: [
-            // No folder (unfiled)
             RadioListTile<String?>(
               title: const Text('No folder'),
               value: null,
@@ -659,7 +938,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 setDialogState(() => selectedFolderId = value);
               },
             ),
-            // Existing folders
             ...chatProvider.folders.map(
               (folder) => RadioListTile<String?>(
                 title: Text(folder.name),
@@ -683,78 +961,6 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _showStarredMessages(BuildContext context) {
-    final theme = Theme.of(context);
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => Consumer<ChatProvider>(
-        builder: (context, chatProvider, _) {
-          final starred = chatProvider.starredMessages;
-          return Container(
-            height: MediaQuery.of(context).size.height * 0.6,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text('Starred Messages', style: theme.textTheme.titleLarge),
-                const Divider(),
-                Expanded(
-                  child: starred.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No starred messages yet',
-                            style: TextStyle(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: starred.length,
-                          itemBuilder: (context, index) {
-                            final msg = starred[index];
-                            return Card(
-                              child: ListTile(
-                                title: Text(
-                                  msg.content,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                subtitle: Text(
-                                  msg.role == 'user' ? 'You' : 'AI',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.star, color: Colors.amber),
-                                  onPressed: () => chatProvider.toggleStar(msg.id),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-          );
-        },
       ),
     );
   }

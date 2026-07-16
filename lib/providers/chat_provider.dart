@@ -57,6 +57,9 @@ class ChatProvider extends ChangeNotifier {
   // Starred messages list
   List<MessagesTableData> _starredMessages = [];
 
+  // Starred messages with chat info (for starred screen)
+  List<StarredMessageInfo> _starredWithChatInfo = [];
+
   // Failed message IDs that can be retried
   Set<String> _failedMessageIds = {};
 
@@ -72,6 +75,7 @@ class ChatProvider extends ChangeNotifier {
   List<FoldersTableData> get folders => _folders;
   Set<String> get starredMessageIds => _starredMessageIds;
   List<MessagesTableData> get starredMessages => _starredMessages;
+  List<StarredMessageInfo> get starredWithChatInfo => _starredWithChatInfo;
   Set<String> get failedMessageIds => _failedMessageIds;
 
   ChatProvider(this._db, this._openRouterService);
@@ -105,6 +109,7 @@ class ChatProvider extends ChangeNotifier {
     final stars = await _db.getAllStars();
     _starredMessageIds = stars.map((s) => s.messageId).toSet();
     _starredMessages = await _db.getStarredMessages();
+    _starredWithChatInfo = await _db.getStarredWithChatInfo();
   }
 
   Future<String?> createChat({
@@ -280,6 +285,7 @@ class ChatProvider extends ChangeNotifier {
       _starredMessageIds.add(messageId);
     }
     _starredMessages = await _db.getStarredMessages();
+    _starredWithChatInfo = await _db.getStarredWithChatInfo();
     notifyListeners();
   }
 
@@ -556,9 +562,21 @@ class ChatProvider extends ChangeNotifier {
       // Reload messages
       _messages = await _db.getMessages(_currentChatId!);
 
-      // Auto-title if this was the first response (chat title is still "New Chat" or "Forked chat")
-      if (chat != null && (chat.title == 'New Chat' || chat.title == 'Forked chat')) {
-        _autoTitleChat(_currentChatId!, text, response.content ?? '');
+      // Auto-title logic
+      if (chat != null) {
+        if (chat.title == 'New Chat') {
+          // First response in a brand new chat → auto-title immediately
+          _autoTitleChat(_currentChatId!, text, response.content ?? '');
+        } else if (chat.title == 'Forked chat') {
+          // For forked chats, only auto-title on the SECOND response
+          // (after user's first follow-up message in the forked conversation)
+          final existingAssistantCount = _messages
+              .where((m) => m.role == 'assistant' && m.id != assistantId)
+              .length;
+          if (existingAssistantCount > 0) {
+            _autoTitleChat(_currentChatId!, text, response.content ?? '');
+          }
+        }
       }
     } catch (e) {
       _error = _friendlyError(e);

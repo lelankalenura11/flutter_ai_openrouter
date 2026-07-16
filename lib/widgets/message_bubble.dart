@@ -11,6 +11,7 @@ class MessageBubble extends StatelessWidget {
   final bool showRetry;
   final VoidCallback? onRetry;
   final VoidCallback? onFork;
+  final bool highlight;
 
   const MessageBubble({
     super.key,
@@ -22,6 +23,7 @@ class MessageBubble extends StatelessWidget {
     this.showRetry = false,
     this.onRetry,
     this.onFork,
+    this.highlight = false,
   });
 
   @override
@@ -54,7 +56,8 @@ class MessageBubble extends StatelessWidget {
               crossAxisAlignment:
                   isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
-                Container(
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.of(context).size.width * 0.75,
                   ),
@@ -66,11 +69,15 @@ class MessageBubble extends StatelessWidget {
                     borderRadius: BorderRadius.only(
                       topLeft: const Radius.circular(16),
                       topRight: const Radius.circular(16),
-                      bottomLeft: Radius.circular(
-                          isUser ? 16 : 4),
-                      bottomRight: Radius.circular(
-                          isUser ? 4 : 16),
+                      bottomLeft: Radius.circular(isUser ? 16 : 4),
+                      bottomRight: Radius.circular(isUser ? 4 : 16),
                     ),
+                    border: highlight
+                        ? Border.all(
+                            color: theme.colorScheme.primary,
+                            width: 2,
+                          )
+                        : null,
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -177,8 +184,7 @@ class MessageBubble extends StatelessWidget {
                         icon: Icon(
                           isStarred ? Icons.star : Icons.star_border,
                           size: 16,
-                          color:
-                              isStarred ? Colors.amber : null,
+                          color: isStarred ? Colors.amber : null,
                         ),
                         onPressed: onStar,
                         padding: EdgeInsets.zero,

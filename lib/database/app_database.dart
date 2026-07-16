@@ -147,7 +147,7 @@ extension StarQueries on AppDatabase {
     }
   }
 
-  /// Get starred messages with their full data (join to messages table)
+  /// Get starred messages with their full data
   Future<List<MessagesTableData>> getStarredMessages() async {
     final stars = await select(starsTable).get();
     if (stars.isEmpty) return [];
@@ -157,6 +157,36 @@ extension StarQueries on AppDatabase {
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
     final messages = await query.get();
     return messages;
+  }
+
+  /// Get chat title for a message
+  Future<String?> getChatTitleForMessage(String messageId) async {
+    final msg = await getMessage(messageId);
+    if (msg == null) return null;
+    final chat = await getChat(msg.chatId);
+    return chat?.title;
+  }
+
+  /// Get all stars with message and chat info (for starred screen)
+  Future<List<StarredMessageInfo>> getStarredWithChatInfo() async {
+    final stars = await getAllStars();
+    if (stars.isEmpty) return [];
+
+    // Order by starredAt descending
+    stars.sort((a, b) => b.starredAt.compareTo(a.starredAt));
+
+    final result = <StarredMessageInfo>[];
+    for (final star in stars) {
+      final msg = await getMessage(star.messageId);
+      if (msg == null) continue;
+      final chat = await getChat(msg.chatId);
+      result.add(StarredMessageInfo(
+        message: msg,
+        chatTitle: chat?.title ?? 'Unknown Chat',
+        starredAt: star.starredAt,
+      ));
+    }
+    return result;
   }
 }
 
@@ -185,6 +215,19 @@ extension SettingsQueries on AppDatabase {
 
   Future<void> updateSettings(SettingsTableCompanion settings) =>
       update(settingsTable).replace(settings);
+}
+
+/// Value object returned by [StarQueries.getStarredWithChatInfo]
+class StarredMessageInfo {
+  final MessagesTableData message;
+  final String chatTitle;
+  final DateTime starredAt;
+
+  const StarredMessageInfo({
+    required this.message,
+    required this.chatTitle,
+    required this.starredAt,
+  });
 }
 
 // --- Main Database Class ---
