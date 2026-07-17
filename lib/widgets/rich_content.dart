@@ -8,11 +8,14 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 /// - `$$...$$` for display math (block)
 /// - `$...$` for inline math
 /// - Everything else rendered as Markdown
+///
+/// When [searchQuery] is non-null, matching text is highlighted with a yellow background.
 class RichContent extends StatelessWidget {
   final String content;
   final TextStyle? textStyle;
   final Color? mathColor;
   final TextAlign textAlign;
+  final String? searchQuery;
 
   const RichContent({
     super.key,
@@ -20,7 +23,50 @@ class RichContent extends StatelessWidget {
     this.textStyle,
     this.mathColor,
     this.textAlign = TextAlign.start,
+    this.searchQuery,
   });
+
+  /// Returns a list of InlineSpan for text, splitting by [query] and wrapping
+  /// matches with a yellow background highlight.
+  List<InlineSpan> _highlightSpans(String text, TextStyle style, String query) {
+    if (query.isEmpty) {
+      return [TextSpan(text: text, style: style)];
+    }
+
+    final lowerText = text.toLowerCase();
+    final lowerQuery = query.toLowerCase();
+    final spans = <InlineSpan>[];
+    int start = 0;
+
+    while (true) {
+      final index = lowerText.indexOf(lowerQuery, start);
+      if (index == -1) {
+        // No more matches — add remaining text
+        if (start < text.length) {
+          spans.add(TextSpan(text: text.substring(start), style: style));
+        }
+        break;
+      }
+
+      // Text before the match
+      if (index > start) {
+        spans.add(TextSpan(text: text.substring(start, index), style: style));
+      }
+
+      // The highlighted match
+      spans.add(TextSpan(
+        text: text.substring(index, index + query.length),
+        style: style.copyWith(
+          background: Paint()..color = Colors.yellow.withValues(alpha: 0.4),
+          fontWeight: FontWeight.w600,
+        ),
+      ));
+
+      start = index + query.length;
+    }
+
+    return spans;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +83,16 @@ class RichContent extends StatelessWidget {
 
     // If there's only one text segment with no math, render as markdown
     if (segments.length == 1 && segments.first is TextSegment) {
-      return _buildMarkdown((segments.first as TextSegment).text, style);
+      final text = (segments.first as TextSegment).text;
+      // If searching, show highlighted plain text instead of markdown
+      if (searchQuery != null && searchQuery!.isNotEmpty) {
+        final spans = _highlightSpans(text, style, searchQuery!);
+        return SelectableText.rich(
+          TextSpan(children: spans),
+          textAlign: textAlign,
+        );
+      }
+      return _buildMarkdown(text, style);
     }
 
     // If no display math, use RichText with inline spans for selectability
@@ -45,7 +100,11 @@ class RichContent extends StatelessWidget {
       final inlineChildren = <InlineSpan>[];
       for (final segment in segments) {
         if (segment is TextSegment) {
-          inlineChildren.add(TextSpan(text: segment.text, style: style));
+          if (searchQuery != null && searchQuery!.isNotEmpty) {
+            inlineChildren.addAll(_highlightSpans(segment.text, style, searchQuery!));
+          } else {
+            inlineChildren.add(TextSpan(text: segment.text, style: style));
+          }
         } else if (segment is InlineMathSegment) {
           inlineChildren.add(
             WidgetSpan(
@@ -105,7 +164,20 @@ class RichContent extends StatelessWidget {
     final children = <Widget>[];
     for (final segment in segments) {
       if (segment is TextSegment) {
-        children.add(_buildMarkdown(segment.text, style));
+        if (searchQuery != null && searchQuery!.isNotEmpty) {
+          final spans = _highlightSpans(segment.text, style, searchQuery!);
+          children.add(
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: SelectableText.rich(
+                TextSpan(children: spans),
+                textAlign: textAlign,
+              ),
+            ),
+          );
+        } else {
+          children.add(_buildMarkdown(segment.text, style));
+        }
       } else if (segment is InlineMathSegment) {
         children.add(
           Padding(

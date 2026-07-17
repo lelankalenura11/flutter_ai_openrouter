@@ -427,6 +427,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             isStarred: chatProvider.isMessageStarred(msg.id),
                             showRetry: isFailed && msg.role == 'user',
                             highlight: isSearchHighlight,
+                            searchQuery: _isSearching ? _searchController.text : null,
                             onCopy: () {
                               Clipboard.setData(ClipboardData(text: msg.content));
                               _showTopSnackBar(context, 'Message copied');

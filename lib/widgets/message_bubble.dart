@@ -13,6 +13,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onFork;
   final bool highlight;
+  final String? searchQuery;
 
   const MessageBubble({
     super.key,
@@ -25,6 +26,7 @@ class MessageBubble extends StatelessWidget {
     this.onRetry,
     this.onFork,
     this.highlight = false,
+    this.searchQuery,
   });
 
   @override
@@ -109,6 +111,7 @@ class MessageBubble extends StatelessWidget {
                           mathColor: isUser
                               ? theme.colorScheme.onPrimary
                               : theme.colorScheme.primary,
+                          searchQuery: searchQuery,
                         ),
                       // Failed state
                       if (showRetry)
