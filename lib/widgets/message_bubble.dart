@@ -3,6 +3,69 @@ import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/attachment_bubble.dart';
 
+/// A simple animated streaming dot for the three-dot thinking indicator.
+class _StreamingDot extends StatefulWidget {
+  final double delay;
+  const _StreamingDot({required this.delay});
+
+  @override
+  State<_StreamingDot> createState() => _StreamingDotState();
+}
+
+class _StreamingDotState extends State<_StreamingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+    _animation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Interval(
+          widget.delay,
+          widget.delay + 0.5,
+          curve: Curves.easeInOut,
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final theme = Theme.of(context);
+        final animValue = _animation.value;
+        final offset = -8.0 * (0.5 - 0.5 * (1.0 - animValue) * (1.0 - animValue));
+        return Transform.translate(
+          offset: Offset(0, offset),
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class MessageBubble extends StatelessWidget {
   final MessagesTableData message;
   final bool showTokenCount;
@@ -98,6 +161,21 @@ class MessageBubble extends StatelessWidget {
                           attachmentPath: message.attachmentPath!,
                           inputType: message.inputType,
                           isUser: isUser,
+                        ),
+                      // Streaming three dots (when content empty and generating)
+                      if (isStreaming && message.content.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 4, bottom: 4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _StreamingDot(delay: 0.0),
+                              SizedBox(width: 4),
+                              _StreamingDot(delay: 0.2),
+                              SizedBox(width: 4),
+                              _StreamingDot(delay: 0.4),
+                            ],
+                          ),
                         ),
                       // Content text — with streaming cursor for in-progress messages
                       if (message.content.isNotEmpty)

@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/pdf_service.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Maps raw error strings to user-friendly messages
@@ -479,6 +480,13 @@ class ChatProvider extends ChangeNotifier {
   // Send message with streaming support
   // ========================================================================
 
+  /// Transcribe an audio file to text using OpenRouter's STT endpoint.
+  ///
+  /// Returns the transcribed text, or null on failure.
+  Future<String?> transcribeAudio(String filePath) async {
+    return await _openRouterService.transcribeAudio(filePath);
+  }
+
   void clearError() {
     _error = null;
     notifyListeners();
@@ -529,12 +537,14 @@ class ChatProvider extends ChangeNotifier {
 
       String? storedAttachmentPath;
       String inputType = 'text';
+      String storedOriginalName = '';
       if (effectiveAttachment != null) {
         storedAttachmentPath = await _storeAttachmentLocally(
           effectiveAttachment.path,
           effectiveAttachment.inputType,
         );
         inputType = effectiveAttachment.inputType;
+        storedOriginalName = effectiveAttachment.displayName;
       }
 
       if (messageIdToReplace != null) {
@@ -551,8 +561,11 @@ class ChatProvider extends ChangeNotifier {
           id: Value(userMsgId),
           chatId: Value(_currentChatId!),
           role: const Value('user'),
-          content: Value(text),
-          inputType: Value(inputType),
+        // Prepend original filename to content for attachment messages
+        content: Value(inputType == 'pdf' || inputType == 'image'
+            ? '📎 $storedOriginalName\n\n$text'
+            : text),
+        inputType: Value(inputType),
           attachmentPath: Value(storedAttachmentPath),
           status: const Value('sending'),
           createdAt: Value(now),
@@ -563,8 +576,10 @@ class ChatProvider extends ChangeNotifier {
           id: userMsgId,
           chatId: _currentChatId!,
           role: 'user',
-          content: text,
-          inputType: inputType,
+        content: inputType == 'pdf' || inputType == 'image'
+            ? '📎 $storedOriginalName\n\n$text'
+            : text,
+        inputType: inputType,
           attachmentPath: storedAttachmentPath,
           inputTokens: null,
           outputTokens: null,
@@ -610,13 +625,27 @@ class ChatProvider extends ChangeNotifier {
           );
           apiMessages.add({'role': msg.role, 'content': content});
         } else if (msg.attachmentPath != null && msg.inputType == 'pdf') {
-          // PDF as text context (vision-based rendering in Phase 5)
-          final content = OpenRouterService.buildMultimodalContent(
-            text: msg.content.isNotEmpty
-                ? msg.content
-                : '[PDF file: ${msg.attachmentPath}]',
-          );
-          apiMessages.add({'role': msg.role, 'content': content});
+          // Render PDF pages as images and send to vision model
+          if (msg.role == 'user' && msg.attachmentPath != null) {
+            final pdfResult = await PdfService.renderPdfAsImages(msg.attachmentPath!);
+            if (pdfResult.hasImages) {
+              final content = OpenRouterService.buildMultimodalContent(
+                text: msg.content.isNotEmpty
+                    ? msg.content
+                    : 'Attached PDF (${pdfResult.totalPages} pages, showing ${pdfResult.renderedCount})',
+                imageBytesList: pdfResult.images,
+              );
+              apiMessages.add({'role': msg.role, 'content': content});
+            } else {
+              // Fallback — send as text
+              final content = OpenRouterService.buildMultimodalContent(
+                text: '[PDF file: ${msg.attachmentPath!.split('/').last}] ${msg.content}',
+              );
+              apiMessages.add({'role': msg.role, 'content': content});
+            }
+          } else {
+            apiMessages.add({'role': msg.role, 'content': msg.content});
+          }
         } else {
           apiMessages.add({'role': msg.role, 'content': msg.content});
         }
@@ -630,7 +659,7 @@ class ChatProvider extends ChangeNotifier {
       _streamingInputTokens = null;
       _streamingOutputTokens = null;
 
-      // Save placeholder to DB so it persists across chat switches
+      // Save to DB so it persists across chat switches
       await _db.insertMessage(MessagesTableCompanion(
         id: Value(assistantId),
         chatId: Value(_currentChatId!),
@@ -691,17 +720,8 @@ class ChatProvider extends ChangeNotifier {
             status: const Value('sent'),
           ));
 
-          // Update local state
-          final idx = _messages.indexWhere((m) => m.id == assistantId);
-          if (idx != -1) {
-            _messages[idx] = _messages[idx].copyWith(
-              content: _streamingContent,
-              status: 'sent',
-              inputTokens: Value<int?>(_streamingInputTokens),
-              outputTokens: Value<int?>(_streamingOutputTokens),
-              reasoning: Value<String?>(_streamingReasoning),
-            );
-          }
+          // Reload messages from DB to get fresh state
+          _messages = await _db.getMessages(_currentChatId!);
 
           // Update chat tokens
           final chat = await _db.getChat(_currentChatId!);

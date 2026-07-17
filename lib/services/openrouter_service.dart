@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_ai_chat_app_openrouter/config/constants.dart';
 import '../services/auth_service.dart';
@@ -214,6 +215,40 @@ class OpenRouterService {
     });
 
     return null; // StreamSubscription not needed since we use callbacks
+  }
+
+  /// Transcribe an audio file to text using OpenRouter's STT endpoint.
+  ///
+  /// Sends a multipart/form-data POST to /api/v1/audio/transcriptions
+  /// with the audio file and model. Returns the transcribed text or null on failure.
+  Future<String?> transcribeAudio(String filePath) async {
+    final apiKey = await _getApiKey();
+    if (apiKey == null || apiKey.isEmpty) return null;
+
+    try {
+      final url = Uri.parse('${AppConstants.openRouterBaseUrl}/audio/transcriptions');
+      final request = http.MultipartRequest('POST', url)
+        ..headers['Authorization'] = 'Bearer $apiKey'
+        ..files.add(await http.MultipartFile.fromPath('file', filePath))
+        ..fields['model'] = 'openai/whisper-large-v3';
+
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 120),
+      );
+
+      if (streamedResponse.statusCode == 200) {
+        final body = await streamedResponse.stream.bytesToString();
+        final data = jsonDecode(body) as Map<String, dynamic>;
+        return data['text'] as String?;
+      } else {
+        final errorBody = await streamedResponse.stream.bytesToString();
+        debugPrint('Transcription error (${streamedResponse.statusCode}): $errorBody');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('Transcription network error: $e');
+      return null;
+    }
   }
 
   /// Build a multimodal content array from text and image(s).

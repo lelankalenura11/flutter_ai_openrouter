@@ -10,6 +10,7 @@ import 'package:flutter_ai_chat_app_openrouter/widgets/thinking_indicator.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/audio_service.dart';
 
 /// Helper to show a top-of-screen notification banner
 void _showTopSnackBar(BuildContext context, String message) {
@@ -246,6 +247,14 @@ class _ChatScreenState extends State<ChatScreen> {
                       _pickPdf();
                     },
                   ),
+                  _AttachmentOption(
+                    icon: Icons.mic,
+                    label: 'Record',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _showRecordingSheet();
+                    },
+                  ),
                 ],
               ),
               const SizedBox(height: 16),
@@ -348,6 +357,208 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // ========================================================================
+  // Audio recording
+  // ========================================================================
+
+  /// Show the recording bottom sheet.
+  void _showRecordingSheet() {
+    final audioService = AudioRecorderService();
+    bool isRecording = false;
+    Duration recordedDuration = Duration.zero;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        // Use StatefulBuilder so we can update the UI from callbacks
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Handle bar
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Mic icon
+                    Icon(
+                      isRecording ? Icons.mic : Icons.mic_none,
+                      size: 56,
+                      color: isRecording
+                          ? Colors.red
+                          : Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Timer display
+                    Text(
+                      '${recordedDuration.inMinutes.toString().padLeft(2, '0')}:${(recordedDuration.inSeconds % 60).toString().padLeft(2, '0')}',
+                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: isRecording ? Colors.red : null,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    Text(
+                      isRecording ? 'Recording...' : 'Tap to start recording',
+                      style: TextStyle(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withValues(alpha: 0.6),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Record / Stop button
+                    FloatingActionButton.large(
+                      heroTag: 'recordButton',
+                      backgroundColor: isRecording ? Colors.red : Theme.of(context).colorScheme.primary,
+                      onPressed: () async {
+                        if (isRecording) {
+                          // Stop recording
+                          final path = await audioService.stopRecording();
+                          setSheetState(() {
+                            isRecording = false;
+                          });
+
+                          if (path != null && mounted) {
+                            // Show transcribing state
+                            Navigator.pop(ctx); // close recording sheet
+                            _transcribeAndPopulate(path);
+                          }
+                        } else {
+                          // Start recording
+                          try {
+                            await audioService.startRecording();
+                            setSheetState(() {
+                              isRecording = true;
+                              recordedDuration = Duration.zero;
+                            });
+
+                            // Listen to duration
+                            audioService.onDurationChanged.listen((duration) {
+                              if (mounted) {
+                                setSheetState(() {
+                                  recordedDuration = duration;
+                                });
+                              }
+                            });
+                          } catch (e) {
+                            setSheetState(() {
+                              isRecording = false;
+                            });
+                            if (mounted) {
+                              _showTopSnackBar(context, 'Could not start recording: $e');
+                            }
+                          }
+                        }
+                      },
+                      child: Icon(
+                        isRecording ? Icons.stop : Icons.mic,
+                        size: 36,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Cancel button (only visible when not recording)
+                    if (!isRecording)
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel'),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      // Cleanup if the sheet is dismissed while recording
+      if (isRecording) {
+        audioService.cancelRecording();
+      }
+      audioService.dispose();
+    });
+  }
+
+  /// Transcribe an audio file and populate the text field with the result.
+  Future<void> _transcribeAndPopulate(String filePath) async {
+    // Show a loading dialog
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Transcribing audio...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final chatProvider = context.read<ChatProvider>();
+      final transcribedText = await chatProvider.transcribeAudio(filePath);
+
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading dialog
+
+      if (transcribedText != null && transcribedText.isNotEmpty) {
+        _messageController.text = transcribedText;
+        // Move cursor to end
+        _messageController.selection = TextSelection.fromPosition(
+          TextPosition(offset: transcribedText.length),
+        );
+        _showTopSnackBar(context, 'Transcription complete');
+      } else {
+        _showTopSnackBar(context, 'Transcription failed. Check your API key and try again.');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading dialog
+      _showTopSnackBar(context, 'Transcription failed: ${e.toString()}');
+    } finally {
+      // Delete the temporary audio file
+      try {
+        final file = File(filePath);
+        if (file.existsSync()) {
+          await file.delete();
+        }
+      } catch (_) {}
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -409,7 +620,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       return const Center(child: Text('Start a conversation!'));
                     }
 
-                    final showThinking = chatProvider.isSending;
+                    // Streaming is shown inside the message bubble itself
+                    final showThinking = false;
                     final itemCount = messages.length + (showThinking ? 1 : 0);
                     return ListView.builder(
                       controller: _scrollController,
@@ -427,7 +639,6 @@ class _ChatScreenState extends State<ChatScreen> {
                             isStarred: chatProvider.isMessageStarred(msg.id),
                             showRetry: isFailed && msg.role == 'user',
                             highlight: isSearchHighlight,
-                            searchQuery: _isSearching ? _searchController.text : null,
                             onCopy: () {
                               Clipboard.setData(ClipboardData(text: msg.content));
                               _showTopSnackBar(context, 'Message copied');
@@ -730,13 +941,15 @@ class _ChatScreenState extends State<ChatScreen> {
                 const SizedBox(width: 8),
                 Consumer<ChatProvider>(
                   builder: (context, chatProvider, _) {
-                    // Show stop button when sending, send button otherwise
+                    // Show stop button when sending in THIS chat, send button otherwise
+                    final isSendingHere = chatProvider.isSending &&
+                        chatProvider.currentChatId == chatProvider.streamingChatId;
                     return FloatingActionButton(
                       mini: true,
-                      onPressed: chatProvider.isSending
+                      onPressed: isSendingHere
                           ? () => chatProvider.cancelResponse()
                           : _sendMessage,
-                      child: chatProvider.isSending
+                      child: isSendingHere
                           ? const Icon(Icons.stop, size: 18)
                           : const Icon(Icons.send),
                     );
@@ -1180,25 +1393,22 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (context, setDialogState) => SimpleDialog(
           title: const Text('Move to folder'),
           children: [
-            RadioGroup<String?>(
+            RadioListTile<String?>(
+              title: const Text('No folder'),
+              value: null,
               groupValue: selectedFolderId,
               onChanged: (value) {
                 setDialogState(() => selectedFolderId = value);
               },
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RadioListTile<String?>(
-                    title: const Text('No folder'),
-                    value: null,
-                  ),
-                  ...chatProvider.folders.map(
-                    (folder) => RadioListTile<String?>(
-                      title: Text(folder.name),
-                      value: folder.id,
-                    ),
-                  ),
-                ],
+            ),
+            ...chatProvider.folders.map(
+              (folder) => RadioListTile<String?>(
+                title: Text(folder.name),
+                value: folder.id,
+                groupValue: selectedFolderId,
+                onChanged: (value) {
+                  setDialogState(() => selectedFolderId = value);
+                },
               ),
             ),
             const Divider(),

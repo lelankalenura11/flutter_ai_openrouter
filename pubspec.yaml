@@ -37,7 +37,14 @@ dependencies:
   flutter_markdown: ^0.7.7+1
   image_picker: ^1.2.3
   file_picker: ">=10.2.0 <11.0.0"
-  printing: ^5.14.3
+  printing: ^5.15.0
+  pdf_text_extraction: ^2.1.1
+  pdfx: ^2.9.2
+  syncfusion_flutter_pdf: ^34.1.31
+  
+  # Audio recording
+  record: ^7.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

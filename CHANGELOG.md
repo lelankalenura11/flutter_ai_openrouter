@@ -5,6 +5,16 @@ All notable changes to this project are documented here. Format loosely follows 
 ## [Unreleased]
 - Nothing yet.
 
+## [0.4.0] — Audio recording & transcription
+### Added
+- In-app audio recording with microphone permission handling.
+- Recording bottom sheet with live timer (MM:SS) and stop button.
+- OpenRouter STT integration: recorded audio transcribed to text via `openai/whisper-large-v3` (multipart POST to `/api/v1/audio/transcriptions`).
+- Transcribed text populated into the message input field for review before sending.
+- `AudioRecorderService` — wrapper around the `record` package with start/stop/cancel, permission check, and duration stream.
+- `transcribeAudio()` method on `OpenRouterService` and `ChatProvider`.
+- Android `RECORD_AUDIO` permission added to manifest.
+
 ## [0.2.0] — Chat organization, error handling & UX improvements
 ### Added
 - Folder management UI: create, rename, delete folders; move chats between folders via the drawer.
