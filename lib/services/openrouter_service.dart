@@ -149,8 +149,6 @@ class OpenRouterService {
         String? reasoning;
         int? promptTokens;
         int? completionTokens;
-        String? finishReason;
-
         await for (final chunk in response.stream.transform(utf8.decoder)) {
           // Parse SSE format: "data: {...}\n\n"
           final lines = chunk.split('\n');
@@ -166,8 +164,6 @@ class OpenRouterService {
 
               final choice = choices[0] as Map<String, dynamic>;
               final delta = choice['delta'] as Map<String, dynamic>?;
-              final finish = choice['finish_reason'] as String?;
-              if (finish != null) finishReason = finish;
 
               if (delta == null) continue;
 
@@ -263,7 +259,9 @@ class OpenRouterService {
             'image_url': {'url': 'data:$mimeType;base64,$base64'},
           });
         }
-      } catch (e) {}
+      } catch (e) {
+        // File may not exist or be unreadable
+      }
     }
 
     if (parts.isEmpty) {

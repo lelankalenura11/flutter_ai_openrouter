@@ -6,7 +6,6 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
-import 'package:flutter_ai_chat_app_openrouter/services/pdf_service.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Maps raw error strings to user-friendly messages
@@ -468,7 +467,7 @@ class ChatProvider extends ChangeNotifier {
       if (!response.isError && response.content != null && response.content!.trim().isNotEmpty) {
         var title = response.content!.trim();
         title = title.replaceAll(RegExp(r'''^["']|["']$'''), '');
-        if (title.length > 60) title = title.substring(0, 57) + '...';
+        if (title.length > 60) title = '${title.substring(0, 57)}...';
         await _db.renameChat(chatId, title);
         _chats = await _db.getAllChats();
         notifyListeners();

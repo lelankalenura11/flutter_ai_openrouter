@@ -1179,22 +1179,25 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (context, setDialogState) => SimpleDialog(
           title: const Text('Move to folder'),
           children: [
-            RadioListTile<String?>(
-              title: const Text('No folder'),
-              value: null,
+            RadioGroup<String?>(
               groupValue: selectedFolderId,
               onChanged: (value) {
                 setDialogState(() => selectedFolderId = value);
               },
-            ),
-            ...chatProvider.folders.map(
-              (folder) => RadioListTile<String?>(
-                title: Text(folder.name),
-                value: folder.id,
-                groupValue: selectedFolderId,
-                onChanged: (value) {
-                  setDialogState(() => selectedFolderId = value);
-                },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RadioListTile<String?>(
+                    title: const Text('No folder'),
+                    value: null,
+                  ),
+                  ...chatProvider.folders.map(
+                    (folder) => RadioListTile<String?>(
+                      title: Text(folder.name),
+                      value: folder.id,
+                    ),
+                  ),
+                ],
               ),
             ),
             const Divider(),
