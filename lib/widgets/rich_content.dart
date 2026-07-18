@@ -16,6 +16,12 @@ class RichContent extends StatelessWidget {
   final Color? mathColor;
   final TextAlign textAlign;
   final String? searchQuery;
+  // Raw character offsets (into `content`) of the currently-active search
+  // match, if this bubble contains it. Used to style that one occurrence
+  // distinctly from the other matches, and to give it a key we can scroll to.
+  final int? activeMatchStart;
+  final int? activeMatchEnd;
+  final GlobalKey? activeMatchKey;
 
   const RichContent({
     super.key,
@@ -24,11 +30,21 @@ class RichContent extends StatelessWidget {
     this.mathColor,
     this.textAlign = TextAlign.start,
     this.searchQuery,
+    this.activeMatchStart,
+    this.activeMatchEnd,
+    this.activeMatchKey,
   });
 
   /// Returns a list of InlineSpan for text, splitting by [query] and wrapping
-  /// matches with a yellow background highlight.
-  List<InlineSpan> _highlightSpans(String text, TextStyle style, String query) {
+  /// matches with a yellow background highlight. [segmentRawStart] is this
+  /// segment's offset within the original `content` string, so occurrence
+  /// offsets can be compared against [activeMatchStart]/[activeMatchEnd].
+  List<InlineSpan> _highlightSpans(
+    String text,
+    TextStyle style,
+    String query,
+    int segmentRawStart,
+  ) {
     if (query.isEmpty) {
       return [TextSpan(text: text, style: style)];
     }
@@ -53,14 +69,41 @@ class RichContent extends StatelessWidget {
         spans.add(TextSpan(text: text.substring(start, index), style: style));
       }
 
-      // The highlighted match
-      spans.add(TextSpan(
-        text: text.substring(index, index + query.length),
-        style: style.copyWith(
-          background: Paint()..color = Colors.yellow.withValues(alpha: 0.4),
-          fontWeight: FontWeight.w600,
-        ),
-      ));
+      final matchText = text.substring(index, index + query.length);
+      final rawStart = segmentRawStart + index;
+      final rawEnd = rawStart + query.length;
+      final isActive = activeMatchStart != null &&
+          activeMatchEnd != null &&
+          rawStart == activeMatchStart &&
+          rawEnd == activeMatchEnd;
+
+      if (isActive) {
+        // Wrapped in a WidgetSpan (instead of a plain TextSpan) purely so we
+        // can attach a GlobalKey to it — that lets the chat screen call
+        // Scrollable.ensureVisible on this exact occurrence, not just the
+        // message bubble as a whole.
+        spans.add(WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Container(
+            key: activeMatchKey,
+            padding: const EdgeInsets.symmetric(horizontal: 1),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(2),
+            ),
+            child: Text(matchText, style: style.copyWith(fontWeight: FontWeight.w700)),
+          ),
+        ));
+      } else {
+        // Other (non-active) occurrences stay yellow, same as before.
+        spans.add(TextSpan(
+          text: matchText,
+          style: style.copyWith(
+            background: Paint()..color = Colors.yellow.withValues(alpha: 0.4),
+            fontWeight: FontWeight.w600,
+          ),
+        ));
+      }
 
       start = index + query.length;
     }
@@ -86,7 +129,8 @@ class RichContent extends StatelessWidget {
       final text = (segments.first as TextSegment).text;
       // If searching, show highlighted plain text instead of markdown
       if (searchQuery != null && searchQuery!.isNotEmpty) {
-        final spans = _highlightSpans(text, style, searchQuery!);
+        final segment = segments.first as TextSegment;
+        final spans = _highlightSpans(text, style, searchQuery!, segment.rawStart);
         return SelectableText.rich(
           TextSpan(children: spans),
           textAlign: textAlign,
@@ -101,7 +145,7 @@ class RichContent extends StatelessWidget {
       for (final segment in segments) {
         if (segment is TextSegment) {
           if (searchQuery != null && searchQuery!.isNotEmpty) {
-            inlineChildren.addAll(_highlightSpans(segment.text, style, searchQuery!));
+            inlineChildren.addAll(_highlightSpans(segment.text, style, searchQuery!, segment.rawStart));
           } else {
             inlineChildren.add(TextSpan(text: segment.text, style: style));
           }
@@ -167,7 +211,7 @@ class RichContent extends StatelessWidget {
     for (final segment in segments) {
       if (segment is TextSegment) {
         if (searchQuery != null && searchQuery!.isNotEmpty) {
-          final spans = _highlightSpans(segment.text, style, searchQuery!);
+          final spans = _highlightSpans(segment.text, style, searchQuery!, segment.rawStart);
           children.add(
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
@@ -228,7 +272,7 @@ class RichContent extends StatelessWidget {
     for (final match in regex.allMatches(text)) {
       // Text before this match
       if (match.start > lastEnd) {
-        segments.add(TextSegment(text.substring(lastEnd, match.start)));
+        segments.add(TextSegment(text.substring(lastEnd, match.start), lastEnd));
       }
 
       // Determine which group matched
@@ -246,7 +290,7 @@ class RichContent extends StatelessWidget {
 
     // Remaining text after last match
     if (lastEnd < text.length) {
-      segments.add(TextSegment(text.substring(lastEnd)));
+      segments.add(TextSegment(text.substring(lastEnd), lastEnd));
     }
 
     return segments;
@@ -278,7 +322,11 @@ sealed class ContentSegment {}
 /// Plain text (not LaTeX).
 class TextSegment extends ContentSegment {
   final String text;
-  TextSegment(this.text);
+  /// This segment's starting offset within the original `content` string —
+  /// used to map a search match's raw start/end back to the right segment
+  /// and occurrence.
+  final int rawStart;
+  TextSegment(this.text, this.rawStart);
 }
 
 /// Inline LaTeX math: `$...$`

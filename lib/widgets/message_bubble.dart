@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/attachment_bubble.dart';
-import 'package:flutter_ai_chat_app_openrouter/providers/search_provider.dart';
 
 /// A simple animated streaming dot for the three-dot thinking indicator.
 class _StreamingDot extends StatefulWidget {
@@ -81,7 +80,12 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onFork;
   final bool highlight;
   final String? searchQuery;
-  final ChatSearchNotifier? searchNotifier;
+  // Raw offsets (into message.content) of the currently-active search match,
+  // set only on the one bubble that contains it — lets RichContent style
+  // that specific occurrence and expose a key to scroll to it precisely.
+  final int? activeMatchStart;
+  final int? activeMatchEnd;
+  final GlobalKey? activeMatchKey;
 
   const MessageBubble({
     super.key,
@@ -95,7 +99,9 @@ class MessageBubble extends StatelessWidget {
     this.onFork,
     this.highlight = false,
     this.searchQuery,
-    this.searchNotifier,
+    this.activeMatchStart,
+    this.activeMatchEnd,
+    this.activeMatchKey,
   });
 
   /// Compute the max bubble width once instead of calling MediaQuery per frame.
@@ -203,6 +209,9 @@ class MessageBubble extends StatelessWidget {
                               ? theme.colorScheme.onPrimary
                               : theme.colorScheme.primary,
                           searchQuery: searchQuery,
+                          activeMatchStart: activeMatchStart,
+                          activeMatchEnd: activeMatchEnd,
+                          activeMatchKey: activeMatchKey,
                         ),
                       // Failed state
                       if (showRetry)
