@@ -11,6 +11,7 @@ import 'package:flutter_ai_chat_app_openrouter/services/embedding_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/settings_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/skill_provider.dart';
+import 'package:flutter_ai_chat_app_openrouter/providers/search_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/chat_screen.dart';
 
 final AppDatabase _database = AppDatabase();
@@ -21,13 +22,20 @@ void main() async {
   // Initialize window manager for desktop platforms (Windows, macOS, Linux)
   if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
     await windowManager.ensureInitialized();
-    await windowManager.setMinimumSize(const Size(800, 600));
-    await windowManager.setTitle('AI Chat');
     await windowManager.setPreventClose(false);
-    // Show window directly instead of waiting for first frame
-    await windowManager.show();
-    await windowManager.focus();
-    await windowManager.center();
+
+    WindowOptions windowOptions = WindowOptions(
+      size: const Size(960, 680),
+      center: true,
+      minimumSize: const Size(800, 600),
+      title: 'AI Chat',
+      skipTaskbar: false,
+    );
+
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
   }
 
   runApp(const MyApp());
@@ -54,6 +62,9 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(
           create: (_) => SkillProvider(_database),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => ChatSearchNotifier(),
         ),
       ],
       child: const AppWithTheme(),

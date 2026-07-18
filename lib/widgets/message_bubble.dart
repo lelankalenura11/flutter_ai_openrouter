@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/attachment_bubble.dart';
+import 'package:flutter_ai_chat_app_openrouter/providers/search_provider.dart';
 
 /// A simple animated streaming dot for the three-dot thinking indicator.
 class _StreamingDot extends StatefulWidget {
@@ -80,6 +81,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onFork;
   final bool highlight;
   final String? searchQuery;
+  final ChatSearchNotifier? searchNotifier;
 
   const MessageBubble({
     super.key,
@@ -93,6 +95,7 @@ class MessageBubble extends StatelessWidget {
     this.onFork,
     this.highlight = false,
     this.searchQuery,
+    this.searchNotifier,
   });
 
   /// Compute the max bubble width once instead of calling MediaQuery per frame.
@@ -186,8 +189,8 @@ class MessageBubble extends StatelessWidget {
                             ],
                           ),
                         ),
-                      // Content text — with streaming cursor for in-progress messages
-                      if (message.content.isNotEmpty)
+                      // Content text — always visible during streaming even if empty
+                      if (isStreaming || message.content.isNotEmpty)
                         RichContent(
                           content:
                               message.content + (isStreaming ? ' ▎' : ''),

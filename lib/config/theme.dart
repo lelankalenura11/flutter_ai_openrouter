@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
   static ThemeData light() {
@@ -9,9 +10,15 @@ class AppTheme {
         seedColor: const Color(0xFF6A5AE0),
         brightness: Brightness.light,
       ),
-      appBarTheme: const AppBarTheme(
+      fontFamily: GoogleFonts.manrope().fontFamily,
+      appBarTheme: AppBarTheme(
         centerTitle: true,
         elevation: 0,
+        titleTextStyle: GoogleFonts.manrope(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: const Color(0xFF1C1B1F),
+        ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
@@ -28,6 +35,7 @@ class AppTheme {
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
         elevation: 2,
       ),
+      textTheme: GoogleFonts.manropeTextTheme(),
     );
   }
 
@@ -39,9 +47,15 @@ class AppTheme {
         seedColor: const Color(0xFF6A5AE0),
         brightness: Brightness.dark,
       ),
-      appBarTheme: const AppBarTheme(
+      fontFamily: GoogleFonts.manrope().fontFamily,
+      appBarTheme: AppBarTheme(
         centerTitle: true,
         elevation: 0,
+        titleTextStyle: GoogleFonts.manrope(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: const Color(0xFFE6E1E5),
+        ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
@@ -55,6 +69,10 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
         ),
       ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        elevation: 2,
+      ),
+      textTheme: GoogleFonts.manropeTextTheme(ThemeData.dark().textTheme),
     );
   }
 }

@@ -918,6 +918,9 @@ class ChatProvider extends ChangeNotifier {
           }
         },
         onComplete: (response) async {
+          // Cancel any pending debounce flushes to prevent race condition
+          _debounceTimer?.cancel();
+          _debounceNeedsFlush = false;
           _streamingContent = response.content ?? '';
           _streamingReasoning = response.reasoning;
           _streamingInputTokens = response.promptTokens;
@@ -933,8 +936,24 @@ class ChatProvider extends ChangeNotifier {
             status: const Value('sent'),
           ));
 
-          // Reload messages from DB to get fresh state
-          _messages = await _db.getMessages(_currentChatId!);
+          // Update in-memory message directly to keep content visible
+          final msgIdx = _messages.indexWhere((m) => m.id == assistantId);
+          if (msgIdx != -1) {
+            _messages[msgIdx] = MessagesTableData(
+              id: _messages[msgIdx].id,
+              chatId: _messages[msgIdx].chatId,
+              role: _messages[msgIdx].role,
+              content: _streamingContent,
+              inputType: _messages[msgIdx].inputType,
+              attachmentPath: _messages[msgIdx].attachmentPath,
+              inputTokens: _streamingInputTokens,
+              outputTokens: _streamingOutputTokens,
+              reasoning: _streamingReasoning,
+              status: 'sent',
+              createdAt: _messages[msgIdx].createdAt,
+              editedAt: DateTime.now(),
+            );
+          }
 
           // Update chat tokens
           final chat = await _db.getChat(_currentChatId!);
@@ -979,6 +998,7 @@ class ChatProvider extends ChangeNotifier {
             }
           }
 
+          // Only clear streaming state AFTER the in-memory update above
           _streamingMessageId = null;
           _streamingChatId = null;
           _streamingContent = '';
@@ -989,6 +1009,9 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
         },
         onError: (error) {
+          // Cancel any pending debounce flushes
+          _debounceTimer?.cancel();
+          _debounceNeedsFlush = false;
           // Mark as failed in DB
           _db.updateMessageStatus(assistantId, 'failed');
           _failedMessageIds.add(assistantId);
@@ -1010,6 +1033,9 @@ class ChatProvider extends ChangeNotifier {
         },
       );
     } catch (e) {
+      // Cancel any pending debounce flushes
+      _debounceTimer?.cancel();
+      _debounceNeedsFlush = false;
       _error = _friendlyError(e);
       _streamingMessageId = null;
       _streamingChatId = null;

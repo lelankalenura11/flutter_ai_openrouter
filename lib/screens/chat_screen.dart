@@ -14,6 +14,7 @@ import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service
 import 'package:flutter_ai_chat_app_openrouter/services/audio_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/video_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/main.dart';
+import 'package:flutter_ai_chat_app_openrouter/providers/search_provider.dart';
 
 /// Helper to show a top-of-screen notification banner
 void _showTopSnackBar(BuildContext context, String message) {
@@ -54,14 +55,13 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
-  final _searchController = TextEditingController();
   bool _showScrollToBottom = false;
 
-  // Search state
+  // Search state — ChatSearchNotifier is the single source of truth for matches
   bool _isSearching = false;
-  List<int> _searchMatchIndices = [];
-  int _currentSearchIndex = -1;
+  final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
+  final Map<String, GlobalKey> _messageKeys = {};
 
   // Inline attachment bar (stays above keyboard, no bottom sheet)
   bool _showAttachmentBar = false;
@@ -154,73 +154,56 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _toggleSearch() {
-    setState(() {
-      _isSearching = !_isSearching;
-      if (!_isSearching) {
-        _searchController.clear();
-        _searchMatchIndices = [];
-        _currentSearchIndex = -1;
-      } else {
-        _searchFocusNode.requestFocus();
-      }
-    });
+    final search = context.read<ChatSearchNotifier>();
+    if (!_isSearching) {
+      search.enterSearch();
+      _searchFocusNode.requestFocus();
+    } else {
+      search.exitSearch();
+      _searchController.clear();
+    }
+    setState(() => _isSearching = !_isSearching);
   }
 
   void _onSearchChanged(String query) {
     final chatProvider = context.read<ChatProvider>();
-    final messages = chatProvider.messages;
-    if (query.isEmpty || messages.isEmpty) {
-      setState(() {
-        _searchMatchIndices = [];
-        _currentSearchIndex = -1;
-      });
-      return;
-    }
-
-    final lowerQuery = query.toLowerCase();
-    final indices = <int>[];
-    for (int i = 0; i < messages.length; i++) {
-      if (messages[i].content.toLowerCase().contains(lowerQuery)) {
-        indices.add(i);
-      }
-    }
-
-    setState(() {
-      _searchMatchIndices = indices;
-      _currentSearchIndex = indices.isNotEmpty ? 0 : -1;
-    });
-
-    if (indices.isNotEmpty) {
-      _scrollToMessage(indices[0]);
-    }
+    final search = context.read<ChatSearchNotifier>();
+    search.setQuery(query, chatProvider.messages);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentMatch());
   }
 
-  void _scrollToMessage(int messageIndex) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        final offset = messageIndex * 80.0; // approximate item height
-        _scrollController.animateTo(
-          offset.clamp(0.0, _scrollController.position.maxScrollExtent),
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+  void _scrollToCurrentMatch() {
+    final search = context.read<ChatSearchNotifier>();
+    if (!search.hasMatches || search.currentMatchIndex < 0) return;
+    final match = search.matches[search.currentMatchIndex];
+    final key = _messageKeys[match.messageId];
+    if (key?.currentContext != null && key!.currentContext!.mounted) {
+      Scrollable.ensureVisible(
+        key.currentContext!,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        alignment: 0.5,
+      );
+      return;
+    }
+    // Fallback
+    final chatProvider = context.read<ChatProvider>();
+    final messages = chatProvider.messages;
+    final msgIdx = messages.indexWhere((m) => m.id == match.messageId);
+    if (msgIdx == -1 || !_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final estOffset = messages.length <= 1 ? 0.0 : (msgIdx / (messages.length - 1)) * maxScroll;
+    _scrollController.animateTo(estOffset.clamp(0.0, maxScroll), duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
   }
 
   void _nextSearchMatch() {
-    if (_searchMatchIndices.isEmpty) return;
-    final nextIndex = (_currentSearchIndex + 1) % _searchMatchIndices.length;
-    setState(() => _currentSearchIndex = nextIndex);
-    _scrollToMessage(_searchMatchIndices[nextIndex]);
+    context.read<ChatSearchNotifier>().nextMatch();
+    _scrollToCurrentMatch();
   }
 
   void _prevSearchMatch() {
-    if (_searchMatchIndices.isEmpty) return;
-    final prevIndex = (_currentSearchIndex - 1 + _searchMatchIndices.length) %
-        _searchMatchIndices.length;
-    setState(() => _currentSearchIndex = prevIndex);
-    _scrollToMessage(_searchMatchIndices[prevIndex]);
+    context.read<ChatSearchNotifier>().previousMatch();
+    _scrollToCurrentMatch();
   }
 
   Future<void> _sendMessage() async {
@@ -702,9 +685,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                   itemBuilder: (context, index) {
                                     final msg = messages[index];
                                     final isFailed = msg.status == 'failed';
+                                    final search = context.read<ChatSearchNotifier>();
                                     final isSearchHighlight = _isSearching &&
-                                        _searchMatchIndices.contains(index) &&
-                                        _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
+                                        search.hasMatches &&
+                                        search.currentMatchIndex >= 0 &&
+                                        search.matches[search.currentMatchIndex].messageId == msg.id;
                                     return RepaintBoundary(
                                       key: ValueKey('bubble_${msg.id}'),
                                       child: MessageBubble(
@@ -1075,11 +1060,13 @@ class _ChatScreenState extends State<ChatScreen> {
         onChanged: _onSearchChanged,
       ),
       actions: [
-        if (_searchMatchIndices.isNotEmpty) ...[
+        if (_isSearching) ...[
           Center(
-            child: Text(
-              '${_currentSearchIndex + 1} of ${_searchMatchIndices.length}',
-              style: const TextStyle(fontSize: 14),
+            child: Consumer<ChatSearchNotifier>(
+              builder: (context, search, _) => Text(
+                search.counterText,
+                style: const TextStyle(fontSize: 14),
+              ),
             ),
           ),
           IconButton(
