@@ -1,6 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/settings_provider.dart';
+import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/export_import_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -232,10 +237,161 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 16),
+
+              // Export / Import
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Data', style: theme.textTheme.titleMedium),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: settings.isExporting
+                              ? null
+                              : () => _exportData(context),
+                          icon: settings.isExporting
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.file_upload_outlined),
+                          label: const Text('Export Data'),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: settings.isImporting
+                              ? null
+                              : () => _importData(context),
+                          icon: settings.isImporting
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.file_download_outlined),
+                          label: const Text('Import Data'),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Exports all chats, messages, skills, and settings as a .zip file. '
+                        'The API key is never included. Import restores data from another device.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           );
         },
       ),
     );
+  }
+
+  Future<void> _exportData(BuildContext context) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final settingsProvider = context.read<SettingsProvider>();
+
+    settingsProvider.setExporting(true);
+
+    try {
+      // Get the database from ChatProvider (same AppDatabase instance)
+      final chatProvider = context.read<ChatProvider>();
+      final db = chatProvider.database;
+      
+      final service = ExportImportService(db);
+      final zipPath = await service.exportData();
+
+      // Share the file
+      await Share.shareXFiles(
+        [XFile(zipPath)],
+        text: 'AI Chat Export',
+      );
+
+      // Clean up the temp file after sharing
+      try {
+        final file = File(zipPath);
+        if (file.existsSync()) {
+          await file.delete();
+        }
+      } catch (_) {}
+
+      if (context.mounted) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text('Export completed')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(content: Text('Export failed: $e')),
+        );
+      }
+    } finally {
+      settingsProvider.setExporting(false);
+    }
+  }
+
+  Future<void> _importData(BuildContext context) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final settingsProvider = context.read<SettingsProvider>();
+
+    try {
+      // Pick a .zip file
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['zip'],
+        allowMultiple: false,
+      );
+
+      if (result == null || result.files.isEmpty || result.files.first.path == null) {
+        return; // User cancelled
+      }
+
+      settingsProvider.setImporting(true);
+
+      final chatProvider = context.read<ChatProvider>();
+      final db = chatProvider.database;
+
+      final service = ExportImportService(db);
+      final importResult = await service.importData(result.files.first.path!);
+
+      // Reload chats to reflect imported data
+      await chatProvider.loadChats();
+
+      if (context.mounted) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Import complete: ${importResult.totalItems} items '
+              '(${importResult.chats} chats, ${importResult.messages} messages, '
+              '${importResult.folders} folders, ${importResult.skills} skills)',
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(content: Text('Import failed: $e')),
+        );
+      }
+    } finally {
+      settingsProvider.setImporting(false);
+    }
   }
 }

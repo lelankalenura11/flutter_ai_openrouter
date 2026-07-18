@@ -18,6 +18,8 @@ class SettingsProvider extends ChangeNotifier {
   String? _error;
   bool _connectionTestResult = false;
   bool _connectionTestRunning = false;
+  bool _isExporting = false;
+  bool _isImporting = false;
 
   String get apiKey => _apiKey;
   String get model => _model;
@@ -28,6 +30,18 @@ class SettingsProvider extends ChangeNotifier {
   String? get error => _error;
   bool get connectionTestResult => _connectionTestResult;
   bool get connectionTestRunning => _connectionTestRunning;
+  bool get isExporting => _isExporting;
+  bool get isImporting => _isImporting;
+
+  void setExporting(bool value) {
+    _isExporting = value;
+    notifyListeners();
+  }
+
+  void setImporting(bool value) {
+    _isImporting = value;
+    notifyListeners();
+  }
 
   SettingsProvider(this._db, this._authService, this._openRouterService);
 

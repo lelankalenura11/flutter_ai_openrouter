@@ -251,8 +251,33 @@ class OpenRouterService {
     }
   }
 
-  /// Build a multimodal content array from text and image(s).
+  /// Models that natively accept video content (rather than frame images).
+  /// MiniMax M3 natively supports video input and expects a video_url content block.
+  static final Set<String> nativeVideoModels = {
+    'minimax/minimax-m3',
+  };
+
+  /// Check if a model supports native video input.
+  static bool supportsNativeVideo(String model) {
+    return nativeVideoModels.any((m) => model.startsWith(m));
+  }
+
+  /// Build a multimodal content array from text, image(s), or video.
+  ///
+  /// For native-video models (e.g., MiniMax M3), video is sent as a
+  /// `video_url` content block with the raw video file bytes as base64.
+  ///
+  /// For other models, video frames are extracted and sent as individual
+  /// `image_url` content blocks.
+  ///
+  /// [model] — The model slug (e.g. "minimax/minimax-m3"). Used to determine
+  ///           whether to send native video or frame images.
+  /// [text] — User's text content.
+  /// [attachmentPath] — Path to the attachment file on disk.
+  /// [inputType] — Type of input: 'image', 'video', 'pdf', etc.
+  /// [imageBytesList] — Pre-extracted image bytes (for frame-based video/PDF).
   static List<Map<String, dynamic>> buildMultimodalContent({
+    String model = '',
     required String text,
     String? attachmentPath,
     String? inputType,
@@ -264,6 +289,29 @@ class OpenRouterService {
       parts.add({'type': 'text', 'text': text});
     }
 
+    // For native-video capable models, send video directly as video_url
+    if (inputType == 'video' && attachmentPath != null && model.isNotEmpty && supportsNativeVideo(model)) {
+      try {
+        final file = File(attachmentPath);
+        if (file.existsSync()) {
+          final bytes = file.readAsBytesSync();
+          final base64 = base64Encode(bytes);
+          parts.add({
+            'type': 'video_url',
+            'video_url': {'url': 'data:video/mp4;base64,$base64'},
+          });
+        }
+      } catch (e) {
+        // Fall back to frame extraction below
+      }
+    }
+
+    // If we already added native video, skip image-based content
+    if (parts.any((p) => p['type'] == 'video_url')) {
+      return parts;
+    }
+
+    // Image bytes from frame extraction (video frames, PDF pages)
     if (imageBytesList != null && imageBytesList.isNotEmpty) {
       for (final bytes in imageBytesList) {
         if (bytes.isEmpty) continue;

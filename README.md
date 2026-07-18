@@ -93,8 +93,8 @@ These are documented in the [suggested build order](https://github.com/lelankale
 | Phase | Feature | Status |
 |---|---|---|
 | 3 | File & image input (picker, compression, isolate processing) | ✅ Done (v0.3.0) |
-| 4 | Audio recording + transcription (OpenRouter endpoint) | 📅 Planned |
-| 5 | Scanned PDF + video via vision models | 📅 Planned |
+| 4 | Audio recording + transcription (OpenRouter endpoint) | ✅ Done (v0.4.0) |
+| 5 | Scanned PDF + video via vision models | ✅ Done (v0.5.0) |
 | 6 | Export/import (versioned zip manifest + media folder) | 📅 Planned |
 | 7 | RAG memory (embedding similarity search, context injection) | 📅 Planned |
 

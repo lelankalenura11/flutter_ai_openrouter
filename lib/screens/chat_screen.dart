@@ -11,6 +11,7 @@ import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/audio_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/video_service.dart';
 
 /// Helper to show a top-of-screen notification banner
 void _showTopSnackBar(BuildContext context, String message) {
@@ -59,6 +60,9 @@ class _ChatScreenState extends State<ChatScreen> {
   List<int> _searchMatchIndices = [];
   int _currentSearchIndex = -1;
   final _searchFocusNode = FocusNode();
+
+  // Inline attachment bar (stays above keyboard, no bottom sheet)
+  bool _showAttachmentBar = false;
 
   @override
   void initState() {
@@ -188,81 +192,20 @@ class _ChatScreenState extends State<ChatScreen> {
   // Attachment handling
   // ========================================================================
 
-  /// Show bottom sheet for picking an attachment source.
-  void _showAttachmentPicker(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Attach file',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _AttachmentOption(
-                    icon: Icons.camera_alt,
-                    label: 'Camera',
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _pickFromCamera();
-                    },
-                  ),
-                  _AttachmentOption(
-                    icon: Icons.photo_library,
-                    label: 'Gallery',
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _pickFromGallery();
-                    },
-                  ),
-                  _AttachmentOption(
-                    icon: Icons.picture_as_pdf,
-                    label: 'PDF',
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _pickPdf();
-                    },
-                  ),
-                  _AttachmentOption(
-                    icon: Icons.mic,
-                    label: 'Record',
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _showRecordingSheet();
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ),
-      ),
-    );
+  /// Toggle the inline attachment bar above the keyboard.
+  void _toggleAttachmentBar() {
+    setState(() {
+      _showAttachmentBar = !_showAttachmentBar;
+    });
+  }
+
+  /// Dismiss the inline attachment bar.
+  void _dismissAttachmentBar() {
+    if (_showAttachmentBar) {
+      setState(() {
+        _showAttachmentBar = false;
+      });
+    }
   }
 
   /// Pick an image from the camera.
@@ -321,6 +264,114 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         _showTopSnackBar(context, 'Could not open gallery. Check storage permissions in Settings.');
+      }
+    }
+  }
+
+  /// Show a choice between Photo and Video from the gallery.
+  void _showMediaPicker() {
+    // Dismiss keyboard first so it doesn't flicker when the sheet appears
+    FocusScope.of(context).unfocus();
+    // Small delay lets keyboard dismissal complete before the sheet animation,
+    // preventing layout conflicts that can cause a freeze.
+    Future.delayed(const Duration(milliseconds: 100), () {
+      showModalBottomSheet(
+        context: context,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Select media type',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: const Icon(Icons.photo),
+                  title: const Text('Photo'),
+                  subtitle: const Text('Pick an image from the gallery'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickFromGallery();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.videocam),
+                  title: const Text('Video'),
+                  subtitle: const Text('Pick a short video (max 60 seconds)'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickVideo();
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  /// Pick a video from the gallery, check duration, and set as pending attachment.
+  /// Frame extraction happens at send time in ChatProvider.
+  Future<void> _pickVideo() async {
+    try {
+      final picker = ImagePicker();
+      final xfile = await picker.pickVideo(
+        source: ImageSource.gallery,
+      );
+      if (xfile == null) return;
+
+      final file = File(xfile.path);
+      final fileSize = await file.length();
+
+      // Check duration exceeds 60s
+      final durationExceeded = await VideoService.checkDuration(xfile.path);
+      if (durationExceeded != null) {
+        if (mounted) {
+          _showTopSnackBar(
+            context,
+            'Video too long (${durationExceeded.formattedDuration}). Maximum is ${maxVideoDurationSeconds} seconds.',
+          );
+        }
+        return;
+      }
+
+      if (!mounted) return;
+      final chatProvider = context.read<ChatProvider>();
+      chatProvider.setPendingAttachment(
+        FileAttachment(
+          path: xfile.path,
+          name: xfile.name,
+          originalName: xfile.name,
+          mimeType: 'video/mp4',
+          sizeBytes: fileSize,
+          inputType: 'video',
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(context, 'Could not pick video: $e');
       }
     }
   }
@@ -829,6 +880,48 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Build an icon-only button for the inline attachment bar (no text, no overflow).
+  Widget _buildAttachmentIcon(IconData icon, String tooltip, VoidCallback onTap) {
+    final theme = Theme.of(context);
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Icon(icon, size: 22, color: theme.colorScheme.primary),
+        ),
+      ),
+    );
+  }
+
+  /// Build the gallery icon button with a popup for Photo/Video choice.
+  Widget _buildGalleryButton(ThemeData theme) {
+    return Tooltip(
+      message: 'Gallery',
+      child: PopupMenuButton<String>(
+        onSelected: (value) {
+          if (value == 'photo') {
+            _pickFromGallery();
+          } else if (value == 'video') {
+            _pickVideo();
+          }
+        },
+        offset: const Offset(0, -80),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        itemBuilder: (context) => [
+          const PopupMenuItem(value: 'photo', child: Text('Photo')),
+          const PopupMenuItem(value: 'video', child: Text('Video')),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Icon(Icons.photo_library, size: 22, color: theme.colorScheme.primary),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInputArea(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
@@ -901,18 +994,44 @@ class _ChatScreenState extends State<ChatScreen> {
                 );
               },
             ),
+            // Inline attachment bar (above keyboard, no dismiss)
+            if (_showAttachmentBar)
+              Container(
+                height: 48,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildAttachmentIcon(Icons.camera_alt, 'Camera', _pickFromCamera),
+                    _buildGalleryButton(theme),
+                    _buildAttachmentIcon(Icons.picture_as_pdf, 'PDF', _pickPdf),
+                    _buildAttachmentIcon(Icons.mic, 'Record', _showRecordingSheet),
+                  ],
+                ),
+              ),
             // Text input + buttons
             Row(
               children: [
-                // Attachment button
+                // Attachment button — toggles inline bar above keyboard
                 Consumer<ChatProvider>(
                   builder: (context, chatProvider, _) {
                     return IconButton(
-                      icon: const Icon(Icons.attach_file),
+                      icon: Icon(
+                        _showAttachmentBar
+                            ? Icons.close
+                            : Icons.attach_file,
+                        color: _showAttachmentBar
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                      ),
                       tooltip: 'Attach file',
                       onPressed: chatProvider.isSending
                           ? null
-                          : () => _showAttachmentPicker(context),
+                          : _toggleAttachmentBar,
                     );
                   },
                 ),

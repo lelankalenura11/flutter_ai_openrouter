@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format loosely follows 
 ## [Unreleased]
 - Nothing yet.
 
+## [0.5.0] — Video via vision model
+### Added
+- Video frame extraction from gallery-picked videos using `video_thumbnail` package.
+- Gallery button now shows a "Photo" / "Video" choice sheet (no separate icon).
+- 60-second maximum video duration enforced at pick time.
+- Frame extraction runs in an isolate via `compute()` to keep UI responsive.
+- Frames (~1 per 2.5s, max 30) are sent as multimodal image content to vision-capable models via `buildMultimodalContent`.
+- `VideoService` — frame extraction, duration probing, and isolate-based processing.
+- `CostEstimateDialog` — reusable dialog showing estimated token/cost before sending expensive inputs.
+- Android `READ_MEDIA_VIDEO` permission already present in manifest.
+
 ## [0.4.0] — Audio recording & transcription
 ### Added
 - In-app audio recording with microphone permission handling.

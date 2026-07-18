@@ -7,6 +7,7 @@ import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/pdf_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/video_service.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Maps raw error strings to user-friendly messages
@@ -100,6 +101,9 @@ class ChatProvider extends ChangeNotifier {
   /// True if the given chat ID is currently generating
   bool isChatGenerating(String chatId) =>
       _isSending && _streamingChatId == chatId;
+
+  /// Public access to the database (for export/import service)
+  AppDatabase get database => _db;
 
   ChatProvider(this._db, this._openRouterService);
 
@@ -619,11 +623,48 @@ class ChatProvider extends ChangeNotifier {
       for (final msg in _messages) {
         if (msg.attachmentPath != null && (msg.inputType == 'image')) {
           final content = OpenRouterService.buildMultimodalContent(
+            model: model,
             text: msg.content,
             attachmentPath: msg.attachmentPath,
             inputType: msg.inputType,
           );
           apiMessages.add({'role': msg.role, 'content': content});
+        } else if (msg.attachmentPath != null && msg.inputType == 'video') {
+          // Check if model supports native video (e.g., MiniMax M3)
+          if (msg.role == 'user' && msg.attachmentPath != null) {
+            if (OpenRouterService.supportsNativeVideo(model)) {
+              // Send original video file directly as native video content
+              final content = OpenRouterService.buildMultimodalContent(
+                model: model,
+                text: msg.content.isNotEmpty ? msg.content : 'Attached video',
+                attachmentPath: msg.attachmentPath,
+                inputType: 'video',
+              );
+              apiMessages.add({'role': msg.role, 'content': content});
+            } else {
+              // Extract video frames and send as images for non-native models
+              final videoResult = await VideoService.extractFrames(msg.attachmentPath!);
+              if (videoResult.hasFrames) {
+                final content = OpenRouterService.buildMultimodalContent(
+                  model: model,
+                  text: msg.content.isNotEmpty
+                      ? msg.content
+                      : 'Attached video (${videoResult.totalFramesExtracted} frames extracted)',
+                  imageBytesList: videoResult.frames,
+                );
+                apiMessages.add({'role': msg.role, 'content': content});
+              } else {
+                // Fallback — send as text
+                final content = OpenRouterService.buildMultimodalContent(
+                  model: model,
+                  text: '[Video file: ${msg.attachmentPath!.split('/').last}] ${msg.content}',
+                );
+                apiMessages.add({'role': msg.role, 'content': content});
+              }
+            }
+          } else {
+            apiMessages.add({'role': msg.role, 'content': msg.content});
+          }
         } else if (msg.attachmentPath != null && msg.inputType == 'pdf') {
           // Render PDF pages as images and send to vision model
           if (msg.role == 'user' && msg.attachmentPath != null) {
