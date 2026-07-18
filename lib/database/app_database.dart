@@ -217,6 +217,34 @@ extension SettingsQueries on AppDatabase {
       update(settingsTable).replace(settings);
 }
 
+/// Convenience methods for embedding operations
+extension EmbeddingQueries on AppDatabase {
+  Future<MessageEmbeddingsTableData?> getEmbedding(String messageId) =>
+      (select(messageEmbeddingsTable)..where((t) => t.messageId.equals(messageId)))
+          .getSingleOrNull();
+
+  Future<void> insertEmbedding(MessageEmbeddingsTableCompanion embedding) =>
+      into(messageEmbeddingsTable).insert(embedding);
+
+  Future<void> deleteEmbedding(String messageId) =>
+      (delete(messageEmbeddingsTable)..where((t) => t.messageId.equals(messageId))).go();
+
+  /// Get all embeddings for messages in a given chat.
+  Future<List<MessageEmbeddingsTableData>> getEmbeddingsForChat(String chatId) async {
+    // Fetch all message IDs for the chat
+    final messages = await getMessages(chatId);
+    if (messages.isEmpty) return [];
+    final ids = messages.map((m) => m.id).toList();
+    return (select(messageEmbeddingsTable)
+          ..where((t) => t.messageId.isIn(ids)))
+        .get();
+  }
+
+  /// Get all embeddings (for cross-chat search).
+  Future<List<MessageEmbeddingsTableData>> getAllEmbeddings() =>
+      select(messageEmbeddingsTable).get();
+}
+
 /// Value object returned by [StarQueries.getStarredWithChatInfo]
 class StarredMessageInfo {
   final MessagesTableData message;
@@ -247,7 +275,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -261,6 +289,7 @@ class AppDatabase extends _$AppDatabase {
             maxTokens: const Value(4096),
             temperature: const Value(0.7),
             theme: const Value('system'),
+            memoryEnabled: const Value(false),
           ));
 
           // Insert built-in skills
@@ -317,6 +346,10 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             // Add status column to messages
             await m.addColumn(messagesTable, messagesTable.status);
+          }
+          if (from < 3) {
+            // Add memoryEnabled column to settings
+            await m.addColumn(settingsTable, settingsTable.memoryEnabled);
           }
         },
       );

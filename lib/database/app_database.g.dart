@@ -2575,6 +2575,21 @@ class $SettingsTableTable extends SettingsTable
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _memoryEnabledMeta = const VerificationMeta(
+    'memoryEnabled',
+  );
+  @override
+  late final GeneratedColumn<bool> memoryEnabled = GeneratedColumn<bool>(
+    'memory_enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("memory_enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -2582,6 +2597,7 @@ class $SettingsTableTable extends SettingsTable
     maxTokens,
     temperature,
     theme,
+    memoryEnabled,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2638,6 +2654,15 @@ class $SettingsTableTable extends SettingsTable
     } else if (isInserting) {
       context.missing(_themeMeta);
     }
+    if (data.containsKey('memory_enabled')) {
+      context.handle(
+        _memoryEnabledMeta,
+        memoryEnabled.isAcceptableOrUnknown(
+          data['memory_enabled']!,
+          _memoryEnabledMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -2667,6 +2692,10 @@ class $SettingsTableTable extends SettingsTable
         DriftSqlType.string,
         data['${effectivePrefix}theme'],
       )!,
+      memoryEnabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}memory_enabled'],
+      )!,
     );
   }
 
@@ -2683,12 +2712,14 @@ class SettingsTableData extends DataClass
   final int maxTokens;
   final double temperature;
   final String theme;
+  final bool memoryEnabled;
   const SettingsTableData({
     required this.id,
     required this.openrouterModel,
     required this.maxTokens,
     required this.temperature,
     required this.theme,
+    required this.memoryEnabled,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2698,6 +2729,7 @@ class SettingsTableData extends DataClass
     map['max_tokens'] = Variable<int>(maxTokens);
     map['temperature'] = Variable<double>(temperature);
     map['theme'] = Variable<String>(theme);
+    map['memory_enabled'] = Variable<bool>(memoryEnabled);
     return map;
   }
 
@@ -2708,6 +2740,7 @@ class SettingsTableData extends DataClass
       maxTokens: Value(maxTokens),
       temperature: Value(temperature),
       theme: Value(theme),
+      memoryEnabled: Value(memoryEnabled),
     );
   }
 
@@ -2722,6 +2755,7 @@ class SettingsTableData extends DataClass
       maxTokens: serializer.fromJson<int>(json['maxTokens']),
       temperature: serializer.fromJson<double>(json['temperature']),
       theme: serializer.fromJson<String>(json['theme']),
+      memoryEnabled: serializer.fromJson<bool>(json['memoryEnabled']),
     );
   }
   @override
@@ -2733,6 +2767,7 @@ class SettingsTableData extends DataClass
       'maxTokens': serializer.toJson<int>(maxTokens),
       'temperature': serializer.toJson<double>(temperature),
       'theme': serializer.toJson<String>(theme),
+      'memoryEnabled': serializer.toJson<bool>(memoryEnabled),
     };
   }
 
@@ -2742,12 +2777,14 @@ class SettingsTableData extends DataClass
     int? maxTokens,
     double? temperature,
     String? theme,
+    bool? memoryEnabled,
   }) => SettingsTableData(
     id: id ?? this.id,
     openrouterModel: openrouterModel ?? this.openrouterModel,
     maxTokens: maxTokens ?? this.maxTokens,
     temperature: temperature ?? this.temperature,
     theme: theme ?? this.theme,
+    memoryEnabled: memoryEnabled ?? this.memoryEnabled,
   );
   SettingsTableData copyWithCompanion(SettingsTableCompanion data) {
     return SettingsTableData(
@@ -2760,6 +2797,9 @@ class SettingsTableData extends DataClass
           ? data.temperature.value
           : this.temperature,
       theme: data.theme.present ? data.theme.value : this.theme,
+      memoryEnabled: data.memoryEnabled.present
+          ? data.memoryEnabled.value
+          : this.memoryEnabled,
     );
   }
 
@@ -2770,14 +2810,21 @@ class SettingsTableData extends DataClass
           ..write('openrouterModel: $openrouterModel, ')
           ..write('maxTokens: $maxTokens, ')
           ..write('temperature: $temperature, ')
-          ..write('theme: $theme')
+          ..write('theme: $theme, ')
+          ..write('memoryEnabled: $memoryEnabled')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, openrouterModel, maxTokens, temperature, theme);
+  int get hashCode => Object.hash(
+    id,
+    openrouterModel,
+    maxTokens,
+    temperature,
+    theme,
+    memoryEnabled,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2786,7 +2833,8 @@ class SettingsTableData extends DataClass
           other.openrouterModel == this.openrouterModel &&
           other.maxTokens == this.maxTokens &&
           other.temperature == this.temperature &&
-          other.theme == this.theme);
+          other.theme == this.theme &&
+          other.memoryEnabled == this.memoryEnabled);
 }
 
 class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
@@ -2795,6 +2843,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
   final Value<int> maxTokens;
   final Value<double> temperature;
   final Value<String> theme;
+  final Value<bool> memoryEnabled;
   final Value<int> rowid;
   const SettingsTableCompanion({
     this.id = const Value.absent(),
@@ -2802,6 +2851,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
     this.maxTokens = const Value.absent(),
     this.temperature = const Value.absent(),
     this.theme = const Value.absent(),
+    this.memoryEnabled = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   SettingsTableCompanion.insert({
@@ -2810,6 +2860,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
     required int maxTokens,
     required double temperature,
     required String theme,
+    this.memoryEnabled = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        openrouterModel = Value(openrouterModel),
@@ -2822,6 +2873,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
     Expression<int>? maxTokens,
     Expression<double>? temperature,
     Expression<String>? theme,
+    Expression<bool>? memoryEnabled,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2830,6 +2882,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
       if (maxTokens != null) 'max_tokens': maxTokens,
       if (temperature != null) 'temperature': temperature,
       if (theme != null) 'theme': theme,
+      if (memoryEnabled != null) 'memory_enabled': memoryEnabled,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2840,6 +2893,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
     Value<int>? maxTokens,
     Value<double>? temperature,
     Value<String>? theme,
+    Value<bool>? memoryEnabled,
     Value<int>? rowid,
   }) {
     return SettingsTableCompanion(
@@ -2848,6 +2902,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
       maxTokens: maxTokens ?? this.maxTokens,
       temperature: temperature ?? this.temperature,
       theme: theme ?? this.theme,
+      memoryEnabled: memoryEnabled ?? this.memoryEnabled,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2870,6 +2925,9 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
     if (theme.present) {
       map['theme'] = Variable<String>(theme.value);
     }
+    if (memoryEnabled.present) {
+      map['memory_enabled'] = Variable<bool>(memoryEnabled.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2884,6 +2942,7 @@ class SettingsTableCompanion extends UpdateCompanion<SettingsTableData> {
           ..write('maxTokens: $maxTokens, ')
           ..write('temperature: $temperature, ')
           ..write('theme: $theme, ')
+          ..write('memoryEnabled: $memoryEnabled, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4274,6 +4333,7 @@ typedef $$SettingsTableTableCreateCompanionBuilder =
       required int maxTokens,
       required double temperature,
       required String theme,
+      Value<bool> memoryEnabled,
       Value<int> rowid,
     });
 typedef $$SettingsTableTableUpdateCompanionBuilder =
@@ -4283,6 +4343,7 @@ typedef $$SettingsTableTableUpdateCompanionBuilder =
       Value<int> maxTokens,
       Value<double> temperature,
       Value<String> theme,
+      Value<bool> memoryEnabled,
       Value<int> rowid,
     });
 
@@ -4317,6 +4378,11 @@ class $$SettingsTableTableFilterComposer
 
   ColumnFilters<String> get theme => $composableBuilder(
     column: $table.theme,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get memoryEnabled => $composableBuilder(
+    column: $table.memoryEnabled,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -4354,6 +4420,11 @@ class $$SettingsTableTableOrderingComposer
     column: $table.theme,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get memoryEnabled => $composableBuilder(
+    column: $table.memoryEnabled,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$SettingsTableTableAnnotationComposer
@@ -4383,6 +4454,11 @@ class $$SettingsTableTableAnnotationComposer
 
   GeneratedColumn<String> get theme =>
       $composableBuilder(column: $table.theme, builder: (column) => column);
+
+  GeneratedColumn<bool> get memoryEnabled => $composableBuilder(
+    column: $table.memoryEnabled,
+    builder: (column) => column,
+  );
 }
 
 class $$SettingsTableTableTableManager
@@ -4425,6 +4501,7 @@ class $$SettingsTableTableTableManager
                 Value<int> maxTokens = const Value.absent(),
                 Value<double> temperature = const Value.absent(),
                 Value<String> theme = const Value.absent(),
+                Value<bool> memoryEnabled = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SettingsTableCompanion(
                 id: id,
@@ -4432,6 +4509,7 @@ class $$SettingsTableTableTableManager
                 maxTokens: maxTokens,
                 temperature: temperature,
                 theme: theme,
+                memoryEnabled: memoryEnabled,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -4441,6 +4519,7 @@ class $$SettingsTableTableTableManager
                 required int maxTokens,
                 required double temperature,
                 required String theme,
+                Value<bool> memoryEnabled = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SettingsTableCompanion.insert(
                 id: id,
@@ -4448,6 +4527,7 @@ class $$SettingsTableTableTableManager
                 maxTokens: maxTokens,
                 temperature: temperature,
                 theme: theme,
+                memoryEnabled: memoryEnabled,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

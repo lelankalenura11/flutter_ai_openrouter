@@ -14,6 +14,7 @@ class SettingsProvider extends ChangeNotifier {
   int _maxTokens = 4096;
   double _temperature = 0.7;
   String _theme = 'system';
+  bool _memoryEnabled = false;
   bool _isLoading = false;
   String? _error;
   bool _connectionTestResult = false;
@@ -26,6 +27,7 @@ class SettingsProvider extends ChangeNotifier {
   int get maxTokens => _maxTokens;
   double get temperature => _temperature;
   String get theme => _theme;
+  bool get memoryEnabled => _memoryEnabled;
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get connectionTestResult => _connectionTestResult;
@@ -60,6 +62,7 @@ class SettingsProvider extends ChangeNotifier {
         _maxTokens = settings.maxTokens;
         _temperature = settings.temperature;
         _theme = settings.theme;
+        _memoryEnabled = settings.memoryEnabled;
       }
     } catch (e) {
       _error = e.toString();
@@ -83,6 +86,7 @@ class SettingsProvider extends ChangeNotifier {
       maxTokens: Value(_maxTokens),
       temperature: Value(_temperature),
       theme: Value(_theme),
+      memoryEnabled: Value(_memoryEnabled),
     ));
     notifyListeners();
   }
@@ -95,6 +99,7 @@ class SettingsProvider extends ChangeNotifier {
       maxTokens: Value(value),
       temperature: Value(_temperature),
       theme: Value(_theme),
+      memoryEnabled: Value(_memoryEnabled),
     ));
     notifyListeners();
   }
@@ -107,6 +112,7 @@ class SettingsProvider extends ChangeNotifier {
       maxTokens: Value(_maxTokens),
       temperature: Value(value),
       theme: Value(_theme),
+      memoryEnabled: Value(_memoryEnabled),
     ));
     notifyListeners();
   }
@@ -119,6 +125,20 @@ class SettingsProvider extends ChangeNotifier {
       maxTokens: Value(_maxTokens),
       temperature: Value(_temperature),
       theme: Value(value),
+      memoryEnabled: Value(_memoryEnabled),
+    ));
+    notifyListeners();
+  }
+
+  Future<void> saveMemoryEnabled(bool value) async {
+    _memoryEnabled = value;
+    await _db.updateSettings(SettingsTableCompanion(
+      id: const Value('default'),
+      openrouterModel: Value(_model),
+      maxTokens: Value(_maxTokens),
+      temperature: Value(_temperature),
+      theme: Value(_theme),
+      memoryEnabled: Value(value),
     ));
     notifyListeners();
   }

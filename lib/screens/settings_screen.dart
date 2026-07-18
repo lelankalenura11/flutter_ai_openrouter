@@ -239,6 +239,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 16),
 
+              // Memory (RAG)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Memory (RAG)', style: theme.textTheme.titleMedium),
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Enable memory recall'),
+                        subtitle: Text(
+                          'AI will consider past messages with similar meaning when responding. '
+                          'Requires an internet connection. May increase token usage slightly.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                        ),
+                        value: settings.memoryEnabled,
+                        onChanged: (value) => settings.saveMemoryEnabled(value),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
               // Export / Import
               Card(
                 child: Padding(

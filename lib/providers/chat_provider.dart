@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/embedding_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/pdf_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/video_service.dart';
@@ -41,6 +42,7 @@ String _friendlyError(dynamic error) {
 class ChatProvider extends ChangeNotifier {
   final AppDatabase _db;
   final OpenRouterService _openRouterService;
+  final EmbeddingService _embeddingService;
   final Uuid _uuid = const Uuid();
 
   // Streaming state for assistant messages being generated
@@ -105,7 +107,7 @@ class ChatProvider extends ChangeNotifier {
   /// Public access to the database (for export/import service)
   AppDatabase get database => _db;
 
-  ChatProvider(this._db, this._openRouterService);
+  ChatProvider(this._db, this._openRouterService, this._embeddingService);
 
   ChatsTableData? get currentChat {
     if (_currentChatId == null) return null;
@@ -132,6 +134,78 @@ class ChatProvider extends ChangeNotifier {
     final destPath = '${attachDir.path}/${_uuid.v4()}.$ext';
     await File(sourcePath).copy(destPath);
     return destPath;
+  }
+
+  // ========================================================================
+  // Embedding helpers
+  // ========================================================================
+
+  /// Generate and store an embedding for a message (non-blocking).
+  /// This is best-effort — failures are silently logged.
+  Future<void> _generateAndStoreEmbedding(String messageId, String text) async {
+    try {
+      final vector = await _embeddingService.generateEmbedding(text);
+      if (vector == null) return;
+
+      await _db.insertEmbedding(MessageEmbeddingsTableCompanion(
+        messageId: Value(messageId),
+        vector: Value(vector.join(',')),
+        model: const Value('openai/text-embedding-3-small'),
+        createdAt: Value(DateTime.now()),
+      ));
+    } catch (e) {
+      debugPrint('Failed to generate/store embedding for $messageId: $e');
+    }
+  }
+
+  /// Retrieve top-K similar messages from the same chat using cosine similarity.
+  ///
+  /// Returns message content strings that can be injected as context.
+  Future<List<String>> _retrieveRelevantMemory(
+    String queryText,
+    String chatId, {
+    int topK = 5,
+  }) async {
+    try {
+      // Get query embedding
+      final queryVector = await _embeddingService.generateEmbedding(queryText);
+      if (queryVector == null) return [];
+
+      // Get existing embeddings for this chat
+      final storedEmbeddings = await _db.getEmbeddingsForChat(chatId);
+      if (storedEmbeddings.isEmpty) return [];
+
+      // Compute similarity scores
+      final scored = <_ScoredMessage>[];
+      for (final stored in storedEmbeddings) {
+        final parts = stored.vector.split(',');
+        if (parts.length != queryVector.length) continue;
+
+        final storedVector = parts.map((s) => double.tryParse(s) ?? 0.0).toList();
+        if (storedVector.length != queryVector.length) continue;
+
+        final score = cosineSimilarity(queryVector, storedVector);
+        if (score > 0.5) { // Only consider reasonably similar results
+          scored.add(_ScoredMessage(stored.messageId, score));
+        }
+      }
+
+      // Sort by score descending, take top-K
+      scored.sort((a, b) => b.score.compareTo(a.score));
+      final topIds = scored.take(topK).map((s) => s.messageId).toSet();
+
+      // Get message contents.
+      final results = <String>[];
+      for (final msg in _messages) {
+        if (topIds.contains(msg.id) && msg.role == 'user') {
+          results.add(msg.content);
+        }
+      }
+      return results;
+    } catch (e) {
+      debugPrint('Memory retrieval error: $e');
+      return [];
+    }
   }
 
   // ========================================================================
@@ -535,6 +609,7 @@ class ChatProvider extends ChangeNotifier {
       final model = settings?.openrouterModel ?? 'openai/gpt-4o';
       final maxTokens = settings?.maxTokens ?? 4096;
       final temperature = settings?.temperature ?? 0.7;
+      final memoryEnabled = settings?.memoryEnabled ?? false;
 
       final now = DateTime.now();
       String userMsgId;
@@ -610,6 +685,16 @@ class ChatProvider extends ChangeNotifier {
         _messages[userMsgIndex] = _messages[userMsgIndex].copyWith(status: 'sent');
       }
 
+      // --- Phase 7: Memory Retrieval ---
+      List<String> memoryContexts = [];
+      if (memoryEnabled && inputType == 'text' && _currentChatId != null) {
+        memoryContexts = await _retrieveRelevantMemory(
+          text,
+          _currentChatId!,
+          topK: 5,
+        );
+      }
+
       // Build message list for API
       final apiMessages = <Map<String, dynamic>>[];
 
@@ -617,6 +702,17 @@ class ChatProvider extends ChangeNotifier {
         apiMessages.add({
           'role': 'system',
           'content': _activeSkillPrompt,
+        });
+      }
+
+      // Inject retrieved memory context (between system prompt and recent history)
+      if (memoryContexts.isNotEmpty) {
+        final memoryBlock = StringBuffer('Relevant context from earlier in this conversation:\n---\n');
+        memoryBlock.write(memoryContexts.join('\n---\n'));
+        memoryBlock.write('\n---');
+        apiMessages.add({
+          'role': 'system',
+          'content': memoryBlock.toString(),
         });
       }
 
@@ -796,6 +892,17 @@ class ChatProvider extends ChangeNotifier {
             }
           }
 
+          // --- Phase 7: Generate embeddings (non-blocking) ---
+          // For the user message
+          if (memoryEnabled && _currentChatId != null) {
+            // Fire-and-forget for user message
+            unawaited(_generateAndStoreEmbedding(userMsgId, text));
+            // Fire-and-forget for assistant response
+            if (_streamingContent.isNotEmpty) {
+              unawaited(_generateAndStoreEmbedding(assistantId, _streamingContent));
+            }
+          }
+
           _streamingMessageId = null;
           _streamingChatId = null;
           _streamingContent = '';
@@ -854,4 +961,12 @@ extension on ChatsTableCompanion {
       updatedAt: updatedAt.value,
     );
   }
+}
+
+/// Internal score holder for memory retrieval.
+class _ScoredMessage {
+  final String messageId;
+  final double score;
+
+  const _ScoredMessage(this.messageId, this.score);
 }

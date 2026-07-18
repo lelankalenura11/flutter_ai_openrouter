@@ -6,6 +6,7 @@ class SettingsTable extends Table {
   IntColumn get maxTokens => integer()();
   RealColumn get temperature => real()();
   TextColumn get theme => text()();
+  BoolColumn get memoryEnabled => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};

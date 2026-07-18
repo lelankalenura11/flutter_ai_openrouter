@@ -4,6 +4,7 @@ import 'package:flutter_ai_chat_app_openrouter/config/theme.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/auth_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/openrouter_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/embedding_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/settings_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/skill_provider.dart';
@@ -23,11 +24,12 @@ class MyApp extends StatelessWidget {
     final authService = AuthService();
     final database = AppDatabase();
     final openRouterService = OpenRouterService(authService);
+    final embeddingService = EmbeddingService(authService);
 
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (_) => ChatProvider(database, openRouterService),
+          create: (_) => ChatProvider(database, openRouterService, embeddingService),
         ),
         ChangeNotifierProvider(
           create: (_) => SettingsProvider(database, authService, openRouterService),

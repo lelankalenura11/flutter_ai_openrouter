@@ -428,8 +428,9 @@ class ExportImportService {
       }
     }
 
-    // 7. Embeddings are NOT imported — they'll be rebuilt on next RAG query
-    // (Phase 7 stub)
+    // 7. Embeddings are NOT imported — they are regenerated lazily.
+    //    When the user next sends a message with memory enabled, any messages
+    //    missing embeddings will be processed on-demand via the chat provider.
 
     return ImportResult(
       folders: importedFolders.length,

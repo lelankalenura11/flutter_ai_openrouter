@@ -1,0 +1,25 @@
+{
+  "name": "flutter_ai_chat_app_openrouter",
+  "version": "1.0.0",
+  "description": "A cross-platform (Windows, Android, iOS) AI chatbot built with Flutter and Dart, using **OpenRouter** as the LLM backend. Local-first: each device keeps its own data, with manual export/import planned for portability between devices (no cloud sync).",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lelankalenura11/flutter_ai_openrouter.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/lelankalenura11/flutter_ai_openrouter/issues"
+  },
+  "homepage": "https://github.com/lelankalenura11/flutter_ai_openrouter#readme"
+}
