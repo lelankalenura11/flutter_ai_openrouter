@@ -1,4 +1,6 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/attachment_bubble.dart';
@@ -49,7 +51,8 @@ class _StreamingDotState extends State<_StreamingDot>
       builder: (context, child) {
         final theme = Theme.of(context);
         final animValue = _animation.value;
-        final offset = -8.0 * (0.5 - 0.5 * (1.0 - animValue) * (1.0 - animValue));
+        final offset =
+            -8.0 * (0.5 - 0.5 * (1.0 - animValue) * (1.0 - animValue));
         return Transform.translate(
           offset: Offset(0, offset),
           child: Container(
@@ -102,10 +105,12 @@ class MessageBubble extends StatelessWidget {
     final isUser = message.role == 'user';
     final isAssistant = message.role == 'assistant';
     final theme = Theme.of(context);
-    final hasAttachment = message.attachmentPath != null && message.inputType != 'text';
+    final hasAttachment =
+        message.attachmentPath != null && message.inputType != 'text';
     final isStreaming = message.status == 'sending' && isAssistant;
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
-    return Padding(
+    final bubbleContent = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(
         mainAxisAlignment:
@@ -184,7 +189,8 @@ class MessageBubble extends StatelessWidget {
                       // Content text — with streaming cursor for in-progress messages
                       if (message.content.isNotEmpty)
                         RichContent(
-                          content: message.content + (isStreaming ? ' ▎' : ''),
+                          content:
+                              message.content + (isStreaming ? ' ▎' : ''),
                           textStyle: TextStyle(
                             color: isUser
                                 ? theme.colorScheme.onPrimary
@@ -261,10 +267,11 @@ class MessageBubble extends StatelessWidget {
                     if (onCopy != null)
                       IconButton(
                         icon: const Icon(Icons.copy, size: 16),
+                        tooltip: 'Copy message',
                         onPressed: onCopy,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                            minWidth: 32, minHeight: 32),
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                     if (onFork != null)
                       IconButton(
@@ -272,8 +279,8 @@ class MessageBubble extends StatelessWidget {
                         tooltip: 'Fork chat from this message',
                         onPressed: onFork,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                            minWidth: 32, minHeight: 32),
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                     if (onStar != null)
                       IconButton(
@@ -284,8 +291,8 @@ class MessageBubble extends StatelessWidget {
                         ),
                         onPressed: onStar,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                            minWidth: 32, minHeight: 32),
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                   ],
                 ),
@@ -307,6 +314,92 @@ class MessageBubble extends StatelessWidget {
         ],
       ),
     );
+
+    // On desktop, wrap with right-click context menu
+    if (isDesktop) {
+      return GestureDetector(
+        onSecondaryTap: () => _showContextMenu(context),
+        child: bubbleContent,
+      );
+    }
+
+    return bubbleContent;
+  }
+
+  /// Show a right-click context menu with clipboard and action options.
+  void _showContextMenu(BuildContext context) {
+    final renderBox = context.findRenderObject() as RenderBox;
+    final offset = renderBox.localToGlobal(Offset.zero);
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        offset.dx + renderBox.size.width / 2,
+        offset.dy,
+        offset.dx + renderBox.size.width,
+        offset.dy + renderBox.size.height,
+      ),
+      items: [
+        const PopupMenuItem(value: 'copy_text', child: Text('Copy text')),
+        const PopupMenuItem(
+            value: 'copy_code', child: Text('Copy as code block')),
+        if (message.attachmentPath != null && message.inputType == 'image')
+          const PopupMenuItem(
+              value: 'copy_image', child: Text('Copy image path')),
+        const PopupMenuDivider(),
+        if (onStar != null)
+          PopupMenuItem(
+            value: 'star',
+            child: Text(isStarred ? 'Unstar message' : 'Star message'),
+          ),
+        if (onRetry != null)
+          const PopupMenuItem(value: 'retry', child: Text('Retry')),
+        if (onFork != null)
+          const PopupMenuItem(value: 'fork', child: Text('Fork chat')),
+      ],
+    ).then((value) {
+      if (value == null) return;
+      switch (value) {
+        case 'copy_text':
+          Clipboard.setData(ClipboardData(text: message.content));
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Message copied')),
+            );
+          }
+          break;
+        case 'copy_code':
+          Clipboard.setData(ClipboardData(
+            text: '```\n${message.content}\n```',
+          ));
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Copied as code block')),
+            );
+          }
+          break;
+        case 'copy_image':
+          if (message.attachmentPath != null) {
+            Clipboard.setData(
+                ClipboardData(text: message.attachmentPath!));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Image path copied')),
+              );
+            }
+          }
+          break;
+        case 'star':
+          onStar?.call();
+          break;
+        case 'retry':
+          onRetry?.call();
+          break;
+        case 'fork':
+          onFork?.call();
+          break;
+      }
+    });
   }
 }
 

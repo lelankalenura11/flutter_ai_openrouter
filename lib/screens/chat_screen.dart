@@ -1,9 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
@@ -12,6 +13,7 @@ import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/audio_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/video_service.dart';
+import 'package:flutter_ai_chat_app_openrouter/main.dart';
 
 /// Helper to show a top-of-screen notification banner
 void _showTopSnackBar(BuildContext context, String message) {
@@ -68,6 +70,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final _drawerSearchController = TextEditingController();
   String _drawerSearchQuery = '';
 
+  // Sidebar toggle (desktop)
+  bool _sidebarVisible = true;
+
   @override
   void initState() {
     super.initState();
@@ -110,6 +115,42 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     });
+  }
+
+  /// Handler for desktop keyboard shortcuts dispatched via Notification.
+  void _handleDesktopShortcut(String action) {
+    final chatProvider = context.read<ChatProvider>();
+    switch (action) {
+      case 'new_chat':
+        chatProvider.createChat();
+        break;
+      case 'new_folder':
+        _showCreateFolderDialog(context);
+        break;
+      case 'search':
+        _toggleSearch();
+        break;
+      case 'focus_input':
+        FocusScope.of(context).requestFocus(FocusNode());
+        _messageController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _messageController.text.length),
+        );
+        break;
+      case 'escape':
+        if (_isSearching) {
+          _toggleSearch();
+        }
+        break;
+      case 'copy_message':
+        // Copy the last message from the current chat
+        final msgs = chatProvider.messages;
+        if (msgs.isNotEmpty) {
+          final lastMsg = msgs.last;
+          Clipboard.setData(ClipboardData(text: lastMsg.content));
+          _showTopSnackBar(context, 'Last message copied');
+        }
+        break;
+    }
   }
 
   void _toggleSearch() {
@@ -204,9 +245,16 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// Returns true if the current platform supports camera (not Windows).
+  bool get _canUseCamera => !Platform.isWindows;
+
   /// Pick an image from the camera.
   /// ImagePicker handles the native camera permission dialog automatically.
   Future<void> _pickFromCamera() async {
+    if (!_canUseCamera) {
+      _showTopSnackBar(context, 'Camera is not available on Windows');
+      return;
+    }
     try {
       final picker = ImagePicker();
       final xfile = await picker.pickImage(
@@ -344,8 +392,15 @@ class _ChatScreenState extends State<ChatScreen> {
   // Audio recording
   // ========================================================================
 
+  /// Returns true if audio recording is available on this platform.
+  bool get _canRecordAudio => !Platform.isWindows;
+
   /// Show the recording bottom sheet.
   void _showRecordingSheet() {
+    if (!_canRecordAudio) {
+      _showTopSnackBar(context, 'Audio recording is not available on Windows');
+      return;
+    }
     final audioService = AudioRecorderService();
     bool isRecording = false;
     Duration recordedDuration = Duration.zero;
@@ -546,159 +601,403 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: _isSearching ? _buildSearchAppBar(theme) : _buildNormalAppBar(theme),
-      drawer: _buildChatListDrawer(context),
-      body: Stack(
-        children: [
-          Column(
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final showPersistentSidebar = isDesktop && screenWidth >= 900;
+
+    // Listen for desktop keyboard shortcut notifications
+    return NotificationListener<DesktopShortcutNotification>(
+      onNotification: (notification) {
+        _handleDesktopShortcut(notification.action);
+        return true;
+      },
+      child: Scaffold(
+          appBar: _isSearching ? _buildSearchAppBar(theme) : _buildNormalAppBar(theme, isDesktop, showPersistentSidebar),
+          drawer: showPersistentSidebar ? null : _buildChatListDrawer(context),
+          // On desktop with wide screen, use a persistent sidebar
+          body: Row(
             children: [
-              // Skill indicator
-              Consumer<ChatProvider>(
-                builder: (context, chatProvider, _) {
-                  if (chatProvider.activeSkillPrompt == null) {
-                    return const SizedBox.shrink();
-                  }
-                  return Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    color: theme.colorScheme.primaryContainer,
-                    child: Row(
-                      children: [
-                        Icon(Icons.psychology,
-                            size: 14, color: theme.colorScheme.onPrimaryContainer),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Using skill: ${chatProvider.activeSkillId?.replaceAll('builtin_', '').replaceAll('_', ' ') ?? 'Custom'}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onPrimaryContainer,
-                          ),
-                        ),
-                        const Spacer(),
-                        InkWell(
-                          onTap: () => chatProvider.setSkill(null, null),
-                          child: Icon(Icons.close,
-                              size: 14,
-                              color: theme.colorScheme.onPrimaryContainer),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-              // Messages
-              Expanded(
-                child: Consumer<ChatProvider>(
-                  builder: (context, chatProvider, _) {
-                    if (chatProvider.isLoading) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    if (chatProvider.currentChatId == null) {
-                      return _buildWelcomeMessage(context);
-                    }
-
-                    final messages = chatProvider.messages;
-                    if (messages.isEmpty) {
-                      return const Center(child: Text('Start a conversation!'));
-                    }
-
-                    final itemCount = messages.length;
-                    return ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.only(top: 8, bottom: 8),
-                      itemCount: itemCount,
-                      itemBuilder: (context, index) {
-                        final msg = messages[index];
-                        final isFailed = msg.status == 'failed';
-                        final isSearchHighlight = _isSearching &&
-                            _searchMatchIndices.contains(index) &&
-                            _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
-                        return RepaintBoundary(
-                          key: ValueKey('bubble_${msg.id}'),
-                          child: MessageBubble(
-                            key: ValueKey(msg.id),
-                            message: msg,
-                            isStarred: chatProvider.isMessageStarred(msg.id),
-                            showRetry: isFailed && msg.role == 'user',
-                            highlight: isSearchHighlight,
-                            searchQuery: _isSearching ? _searchController.text : null,
-                            onCopy: () {
-                              Clipboard.setData(ClipboardData(text: msg.content));
-                              _showTopSnackBar(context, 'Message copied');
-                            },
-                            onStar: () => chatProvider.toggleStar(msg.id),
-                            onRetry: isFailed
-                                ? () => chatProvider.retryMessage(msg.id)
-                                : null,
-                            onFork: (msg.role == 'user' || msg.role == 'assistant')
-                                ? () => _forkChat(chatProvider, msg.id)
-                                : null,
-                          ),
-                        );
-                      },
-                    );
-                  },
+              // Collapsible persistent sidebar on desktop
+              if (showPersistentSidebar && _sidebarVisible)
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 280,
+                  child: Material(
+                    elevation: 1,
+                    child: _buildSidebarContent(),
+                  ),
                 ),
-              ),
-              // Error banner
-              Consumer<ChatProvider>(
-                builder: (context, chatProvider, _) {
-                  if (chatProvider.error == null) {
-                    return const SizedBox.shrink();
-                  }
-                  return Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(8),
-                    color: theme.colorScheme.errorContainer,
-                    child: Row(
-                      children: [
-                        Icon(Icons.error_outline,
-                            size: 16, color: theme.colorScheme.onErrorContainer),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            chatProvider.error!,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: theme.colorScheme.onErrorContainer,
+              // Main chat area with drag & drop support
+              Expanded(
+                child: DropTarget(
+                  onDragDone: (detail) {
+                    _handleDroppedFiles(detail.files);
+                  },
+                  onDragEntered: (detail) {
+                    // Visual feedback handled by drag overlay
+                  },
+                  onDragExited: (detail) {
+                    // Reset visual feedback
+                  },
+                  child: Stack(
+                    children: [
+                      Column(
+                        children: [
+                          // Skill indicator
+                          Consumer<ChatProvider>(
+                            builder: (context, chatProvider, _) {
+                              if (chatProvider.activeSkillPrompt == null) {
+                                return const SizedBox.shrink();
+                              }
+                              return Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                color: theme.colorScheme.primaryContainer,
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.psychology,
+                                        size: 14, color: theme.colorScheme.onPrimaryContainer),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Using skill: ${chatProvider.activeSkillId?.replaceAll('builtin_', '').replaceAll('_', ' ') ?? 'Custom'}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: theme.colorScheme.onPrimaryContainer,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    InkWell(
+                                      onTap: () => chatProvider.setSkill(null, null),
+                                      child: Icon(Icons.close,
+                                          size: 14,
+                                          color: theme.colorScheme.onPrimaryContainer),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                          // Messages
+                          Expanded(
+                            child: Consumer<ChatProvider>(
+                              builder: (context, chatProvider, _) {
+                                if (chatProvider.isLoading) {
+                                  return const Center(child: CircularProgressIndicator());
+                                }
+
+                                if (chatProvider.currentChatId == null) {
+                                  return _buildWelcomeMessage(context);
+                                }
+
+                                final messages = chatProvider.messages;
+                                if (messages.isEmpty) {
+                                  return const Center(child: Text('Start a conversation!'));
+                                }
+
+                                final itemCount = messages.length;
+                                return ListView.builder(
+                                  controller: _scrollController,
+                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                                  itemCount: itemCount,
+                                  itemBuilder: (context, index) {
+                                    final msg = messages[index];
+                                    final isFailed = msg.status == 'failed';
+                                    final isSearchHighlight = _isSearching &&
+                                        _searchMatchIndices.contains(index) &&
+                                        _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
+                                    return RepaintBoundary(
+                                      key: ValueKey('bubble_${msg.id}'),
+                                      child: MessageBubble(
+                                        key: ValueKey(msg.id),
+                                        message: msg,
+                                        isStarred: chatProvider.isMessageStarred(msg.id),
+                                        showRetry: isFailed && msg.role == 'user',
+                                        highlight: isSearchHighlight,
+                                        searchQuery: _isSearching ? _searchController.text : null,
+                                        onCopy: () {
+                                          Clipboard.setData(ClipboardData(text: msg.content));
+                                          _showTopSnackBar(context, 'Message copied');
+                                        },
+                                        onStar: () => chatProvider.toggleStar(msg.id),
+                                        onRetry: isFailed
+                                            ? () => chatProvider.retryMessage(msg.id)
+                                            : null,
+                                        onFork: (msg.role == 'user' || msg.role == 'assistant')
+                                            ? () => _forkChat(chatProvider, msg.id)
+                                            : null,
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
                             ),
                           ),
+                          // Error banner
+                          Consumer<ChatProvider>(
+                            builder: (context, chatProvider, _) {
+                              if (chatProvider.error == null) {
+                                return const SizedBox.shrink();
+                              }
+                              return Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(8),
+                                color: theme.colorScheme.errorContainer,
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.error_outline,
+                                        size: 16, color: theme.colorScheme.onErrorContainer),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        chatProvider.error!,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: theme.colorScheme.onErrorContainer,
+                                        ),
+                                      ),
+                                    ),
+                                    InkWell(
+                                      onTap: () => chatProvider.clearError(),
+                                      child: Icon(Icons.close,
+                                          size: 14,
+                                          color: theme.colorScheme.onErrorContainer),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                          // Input area
+                          _buildInputArea(context),
+                        ],
+                      ),
+                      // Jump-to-bottom FAB
+                      if (_showScrollToBottom)
+                        Positioned(
+                          right: 16,
+                          bottom: 80,
+                          child: FloatingActionButton.small(
+                            heroTag: 'scrollToBottom',
+                            onPressed: _scrollToBottom,
+                            child: const Icon(Icons.arrow_downward),
+                          ),
                         ),
-                        InkWell(
-                          onTap: () => chatProvider.clearError(),
-                          child: Icon(Icons.close,
-                              size: 14,
-                              color: theme.colorScheme.onErrorContainer),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                    ],
+                  ),
+                ),
               ),
-              // Input area
-              _buildInputArea(context),
-            ],
-          ),
-          // Jump-to-bottom FAB
-          if (_showScrollToBottom)
-            Positioned(
-              right: 16,
-              bottom: 80,
-              child: FloatingActionButton.small(
-                heroTag: 'scrollToBottom',
-                onPressed: _scrollToBottom,
-                child: const Icon(Icons.arrow_downward),
-              ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  PreferredSizeWidget _buildNormalAppBar(ThemeData theme) {
+  /// Handle files dropped from the OS onto the chat area.
+  void _handleDroppedFiles(List<dynamic> files) {
+    final chatProvider = context.read<ChatProvider>();
+    for (final file in files) {
+      final path = file.path;
+      final name = file.name;
+      if (path == null) continue;
+      final ext = name.split('.').last.toLowerCase();
+
+      String mimeType;
+      String inputType;
+      if (ext == 'pdf') {
+        mimeType = 'application/pdf';
+        inputType = 'pdf';
+      } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].contains(ext)) {
+        mimeType = 'image/$ext';
+        inputType = 'image';
+      } else if (['mp4', 'avi', 'mov', 'mkv'].contains(ext)) {
+        mimeType = 'video/$ext';
+        inputType = 'video';
+      } else {
+        mimeType = 'application/octet-stream';
+        inputType = 'file';
+      }
+
+      chatProvider.setPendingAttachment(
+        FileAttachment(
+          path: path,
+          name: name,
+          originalName: name,
+          mimeType: mimeType,
+          sizeBytes: file.size ?? 0,
+          inputType: inputType,
+        ),
+      );
+      _showTopSnackBar(context, 'File attached: $name');
+      break; // Only handle the first dropped file for now
+    }
+  }
+
+  /// Build the persistent sidebar content (desktop-adaptive version of drawer).
+  Widget _buildSidebarContent() {
+    return Consumer<ChatProvider>(
+      builder: (context, chatProvider, _) {
+        return Column(
+          children: [
+            // Header
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 48, 16, 16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AI Chat',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${chatProvider.chats.length} chats',
+                    style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onPrimaryContainer
+                          .withValues(alpha: 0.7),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Search bar
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: TextField(
+                controller: _drawerSearchController,
+                decoration: InputDecoration(
+                  hintText: 'Search chats...',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  suffixIcon: _drawerSearchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () {
+                            _drawerSearchController.clear();
+                            setState(() => _drawerSearchQuery = '');
+                          },
+                        )
+                      : null,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  isDense: true,
+                ),
+                onChanged: (value) => setState(() => _drawerSearchQuery = value),
+              ),
+            ),
+            // New Chat button
+            ListTile(
+              leading: const Icon(Icons.add),
+              title: const Text('New Chat'),
+              onTap: () => chatProvider.createChat(),
+            ),
+            // Scrollable chat list
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  // Starred messages
+                  ListTile(
+                    leading: const Icon(Icons.star, color: Colors.amber),
+                    title: const Text('Starred'),
+                    dense: true,
+                    trailing: chatProvider.starredMessages.isNotEmpty
+                        ? Chip(
+                            label: Text(
+                              '${chatProvider.starredMessages.length}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          )
+                        : null,
+                    onTap: () => _showStarredMessages(context),
+                  ),
+                  // Folders section
+                  ExpansionTile(
+                    leading: const Icon(Icons.folder),
+                    title: Text('Folders${chatProvider.folders.isNotEmpty ? ' (${chatProvider.folders.length})' : ''}'),
+                    initiallyExpanded: false,
+                    children: [
+                      ...chatProvider.folders.map((folder) {
+                        final folderChatCount = chatProvider.getChatsByFolder(folder.id).length;
+                        return ExpansionTile(
+                          leading: const Icon(Icons.folder_open, size: 20),
+                          title: Text('${folder.name} ($folderChatCount)'),
+                          dense: true,
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 18),
+                            onSelected: (value) {
+                              if (value == 'rename') {
+                                _showRenameFolderDialog(context, folder.id, folder.name);
+                              } else if (value == 'delete') {
+                                chatProvider.deleteFolder(folder.id);
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                            ],
+                          ),
+                          initiallyExpanded: false,
+                          children: chatProvider
+                              .getChatsByFolder(folder.id)
+                              .map((chat) => _buildChatTile(chatProvider, chat, isInSidebar: true))
+                              .toList(),
+                        );
+                      }),
+                      ListTile(
+                        leading: const Icon(Icons.create_new_folder_outlined),
+                        title: const Text('New Folder'),
+                        dense: true,
+                        onTap: () => _showCreateFolderDialog(context),
+                      ),
+                    ],
+                  ),
+                  // Unfiled chats
+                  if (chatProvider.getChatsByFolder(null).isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Text(
+                        'Unfiled',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    ...chatProvider
+                        .getChatsByFolder(null)
+                        .map((chat) => _buildChatTile(chatProvider, chat, isInSidebar: true)),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  PreferredSizeWidget _buildNormalAppBar(ThemeData theme, [bool isDesktop = false, bool showSidebar = false]) {
     return AppBar(
+      leading: (isDesktop && showSidebar)
+          ? IconButton(
+              icon: Icon(_sidebarVisible ? Icons.menu_open : Icons.menu),
+              tooltip: _sidebarVisible ? 'Close sidebar' : 'Open sidebar',
+              onPressed: () => setState(() => _sidebarVisible = !_sidebarVisible),
+            )
+          : null,
       title: Consumer<ChatProvider>(
         builder: (context, chatProvider, _) {
           if (chatProvider.currentChatId == null) {
@@ -709,6 +1008,12 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       ),
       actions: [
+        if (isDesktop && showSidebar && !_sidebarVisible)
+          IconButton(
+            icon: const Icon(Icons.list),
+            tooltip: 'Show chat list',
+            onPressed: () => setState(() => _sidebarVisible = true),
+          ),
         IconButton(
           icon: const Icon(Icons.search),
           tooltip: 'Search',
@@ -722,13 +1027,32 @@ class _ChatScreenState extends State<ChatScreen> {
         IconButton(
           icon: const Icon(Icons.settings),
           tooltip: 'Settings',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SettingsScreen()),
-          ),
+          onPressed: () => _openSettings(context),
         ),
       ],
     );
+  }
+
+  void _openSettings(BuildContext context) {
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    if (isDesktop) {
+      // Open as a half-screen dialog on desktop
+      showDialog(
+        context: context,
+        builder: (dialogContext) => Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+          child: SizedBox(
+            width: 600,
+            child: SettingsScreen(),
+          ),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      );
+    }
   }
 
   PreferredSizeWidget _buildSearchAppBar(ThemeData theme) {
@@ -1213,11 +1537,11 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ),
-      ...matchingChats.map((chat) => _buildChatTile(chatProvider, chat)),
+      ...matchingChats.map((chat) => _buildChatTile(chatProvider, chat, isInSidebar: true)),
     ];
   }
 
-  Widget _buildChatTile(ChatProvider chatProvider, ChatsTableData chat) {
+  Widget _buildChatTile(ChatProvider chatProvider, ChatsTableData chat, {bool isInSidebar = false}) {
     final isGenerating = chatProvider.isChatGenerating(chat.id);
     return ListTile(
       dense: true,
@@ -1248,7 +1572,7 @@ class _ChatScreenState extends State<ChatScreen> {
           } else if (value == 'move') {
             _showMoveChatDialog(context, chat.id, chat.folderId);
           } else if (value == 'delete') {
-            if (chat.id == chatProvider.currentChatId) {
+            if (chat.id == chatProvider.currentChatId && !isInSidebar) {
               Navigator.pop(context);
             }
             chatProvider.deleteChat(chat.id);
@@ -1261,7 +1585,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       onTap: () {
-        Navigator.pop(context);
+        if (!isInSidebar) {
+          Navigator.pop(context);
+        }
         chatProvider.selectChat(chat.id);
       },
     );
