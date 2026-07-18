@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_video_thumbnail_plus/flutter_video_thumbnail_plus.dart';

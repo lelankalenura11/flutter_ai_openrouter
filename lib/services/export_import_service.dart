@@ -163,9 +163,6 @@ class ExportImportService {
 
     final outputFile = File(outputPath);
     final encoded = ZipEncoder().encode(archive);
-    if (encoded == null) {
-      throw Exception('Failed to encode zip archive');
-    }
     await outputFile.writeAsBytes(encoded);
 
     return outputPath;
@@ -188,9 +185,6 @@ class ExportImportService {
 
     final bytes = await zipFile.readAsBytes();
     final archive = ZipDecoder().decodeBytes(bytes);
-    if (archive == null) {
-      throw Exception('Invalid or corrupted .zip file');
-    }
 
     // 2. Read manifest
     final manifestFile = archive.files.firstWhere(
@@ -305,7 +299,6 @@ class ExportImportService {
       final oldSkillId = c['skillId'] as String?;
       final newSkillId = oldSkillId != null ? skillIdMap[oldSkillId] : null;
 
-      final oldForkedFrom = c['forkedFromMessageId'] as String?;
       // Message IDs aren't mapped yet, but the FK is nullable — we set null
       // since forked references would point to old messages anyway
 

@@ -6,7 +6,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
-import 'package:flutter_ai_chat_app_openrouter/widgets/thinking_indicator.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
@@ -199,15 +198,6 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  /// Dismiss the inline attachment bar.
-  void _dismissAttachmentBar() {
-    if (_showAttachmentBar) {
-      setState(() {
-        _showAttachmentBar = false;
-      });
-    }
-  }
-
   /// Pick an image from the camera.
   /// ImagePicker handles the native camera permission dialog automatically.
   Future<void> _pickFromCamera() async {
@@ -268,70 +258,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Show a choice between Photo and Video from the gallery.
-  void _showMediaPicker() {
-    // Dismiss keyboard first so it doesn't flicker when the sheet appears
-    FocusScope.of(context).unfocus();
-    // Small delay lets keyboard dismissal complete before the sheet animation,
-    // preventing layout conflicts that can cause a freeze.
-    Future.delayed(const Duration(milliseconds: 100), () {
-      showModalBottomSheet(
-        context: context,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        builder: (ctx) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.3),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Select media type',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 16),
-                ListTile(
-                  leading: const Icon(Icons.photo),
-                  title: const Text('Photo'),
-                  subtitle: const Text('Pick an image from the gallery'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _pickFromGallery();
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.videocam),
-                  title: const Text('Video'),
-                  subtitle: const Text('Pick a short video (max 60 seconds)'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _pickVideo();
-                  },
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
-        ),
-      );
-    });
-  }
-
   /// Pick a video from the gallery, check duration, and set as pending attachment.
   /// Frame extraction happens at send time in ChatProvider.
   Future<void> _pickVideo() async {
@@ -351,7 +277,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (mounted) {
           _showTopSnackBar(
             context,
-            'Video too long (${durationExceeded.formattedDuration}). Maximum is ${maxVideoDurationSeconds} seconds.',
+            'Video too long ($durationExceeded.formattedDuration). Maximum is $maxVideoDurationSeconds seconds.',
           );
         }
         return;
@@ -486,18 +412,19 @@ class _ChatScreenState extends State<ChatScreen> {
                       heroTag: 'recordButton',
                       backgroundColor: isRecording ? Colors.red : Theme.of(context).colorScheme.primary,
                       onPressed: () async {
-                        if (isRecording) {
-                          // Stop recording
-                          final path = await audioService.stopRecording();
-                          setSheetState(() {
-                            isRecording = false;
-                          });
+                          if (isRecording) {
+                            // Stop recording
+                            final navigator = Navigator.of(ctx);
+                            final path = await audioService.stopRecording();
+                            setSheetState(() {
+                              isRecording = false;
+                            });
 
-                          if (path != null && mounted) {
-                            // Show transcribing state
-                            Navigator.pop(ctx); // close recording sheet
-                            _transcribeAndPopulate(path);
-                          }
+                            if (path != null && mounted) {
+                              // Show transcribing state
+                              navigator.pop(); // close recording sheet
+                              _transcribeAndPopulate(path);
+                            }
                         } else {
                           // Start recording
                           try {
@@ -520,7 +447,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               isRecording = false;
                             });
                             if (mounted) {
-                              _showTopSnackBar(context, 'Could not start recording: $e');
+                              _showTopSnackBar(this.context, 'Could not start recording: $e');
                             }
                           }
                         }
@@ -671,40 +598,34 @@ class _ChatScreenState extends State<ChatScreen> {
                       return const Center(child: Text('Start a conversation!'));
                     }
 
-                    // Streaming is shown inside the message bubble itself
-                    final showThinking = false;
-                    final itemCount = messages.length + (showThinking ? 1 : 0);
+                    final itemCount = messages.length;
                     return ListView.builder(
                       controller: _scrollController,
                       padding: const EdgeInsets.only(top: 8, bottom: 8),
                       itemCount: itemCount,
                       itemBuilder: (context, index) {
-                        if (index < messages.length) {
-                          final msg = messages[index];
-                          final isFailed = msg.status == 'failed';
-                          final isSearchHighlight = _isSearching &&
-                              _searchMatchIndices.contains(index) &&
-                              _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
-                          return MessageBubble(
-                            message: msg,
-                            isStarred: chatProvider.isMessageStarred(msg.id),
-                            showRetry: isFailed && msg.role == 'user',
-                            highlight: isSearchHighlight,
-                            onCopy: () {
-                              Clipboard.setData(ClipboardData(text: msg.content));
-                              _showTopSnackBar(context, 'Message copied');
-                            },
-                            onStar: () => chatProvider.toggleStar(msg.id),
-                            onRetry: isFailed
-                                ? () => chatProvider.retryMessage(msg.id)
-                                : null,
-                            onFork: (msg.role == 'user' || msg.role == 'assistant')
-                                ? () => _forkChat(chatProvider, msg.id)
-                                : null,
-                          );
-                        }
-                        // Last item: thinking indicator
-                        return const ThinkingIndicator();
+                        final msg = messages[index];
+                        final isFailed = msg.status == 'failed';
+                        final isSearchHighlight = _isSearching &&
+                            _searchMatchIndices.contains(index) &&
+                            _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
+                        return MessageBubble(
+                          message: msg,
+                          isStarred: chatProvider.isMessageStarred(msg.id),
+                          showRetry: isFailed && msg.role == 'user',
+                          highlight: isSearchHighlight,
+                          onCopy: () {
+                            Clipboard.setData(ClipboardData(text: msg.content));
+                            _showTopSnackBar(context, 'Message copied');
+                          },
+                          onStar: () => chatProvider.toggleStar(msg.id),
+                          onRetry: isFailed
+                              ? () => chatProvider.retryMessage(msg.id)
+                              : null,
+                          onFork: (msg.role == 'user' || msg.role == 'assistant')
+                              ? () => _forkChat(chatProvider, msg.id)
+                              : null,
+                        );
                       },
                     );
                   },
@@ -1505,43 +1426,50 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _showMoveChatDialog(BuildContext context, String chatId, String? currentFolderId) {
     final chatProvider = context.read<ChatProvider>();
-    String? selectedFolderId = currentFolderId;
+    final selectedFolderId = ValueNotifier<String?>(currentFolderId);
     showDialog(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => SimpleDialog(
-          title: const Text('Move to folder'),
-          children: [
-            RadioListTile<String?>(
-              title: const Text('No folder'),
-              value: null,
-              groupValue: selectedFolderId,
-              onChanged: (value) {
-                setDialogState(() => selectedFolderId = value);
-              },
-            ),
-            ...chatProvider.folders.map(
-              (folder) => RadioListTile<String?>(
-                title: Text(folder.name),
-                value: folder.id,
-                groupValue: selectedFolderId,
-                onChanged: (value) {
-                  setDialogState(() => selectedFolderId = value);
-                },
-              ),
-            ),
-            const Divider(),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: FilledButton(
-                onPressed: () {
-                  chatProvider.moveChatToFolder(chatId, selectedFolderId);
-                  Navigator.pop(dialogContext);
-                },
-                child: const Text('Move'),
-              ),
-            ),
-          ],
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Move to folder'),
+        content: ValueListenableBuilder<String?>(
+          valueListenable: selectedFolderId,
+          builder: (context, value, _) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RadioGroup<String?>(
+                  groupValue: value,
+                  onChanged: (v) => selectedFolderId.value = v,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RadioListTile<String?>(
+                        title: const Text('No folder'),
+                        value: null,
+                      ),
+                      ...chatProvider.folders.map(
+                        (folder) => RadioListTile<String?>(
+                          title: Text(folder.name),
+                          value: folder.id,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: FilledButton(
+                    onPressed: () {
+                      chatProvider.moveChatToFolder(chatId, selectedFolderId.value);
+                      Navigator.pop(dialogContext);
+                    },
+                    child: const Text('Move'),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -1555,46 +1483,6 @@ class _ChatScreenState extends State<ChatScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => const SkillsSheet(),
-    );
-  }
-}
-
-/// A circular option button in the attachment picker sheet.
-class _AttachmentOption extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _AttachmentOption({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        CircleAvatar(
-          radius: 28,
-          backgroundColor: theme.colorScheme.primaryContainer,
-          child: IconButton(
-            icon: Icon(icon, size: 24),
-            color: theme.colorScheme.onPrimaryContainer,
-            onPressed: onTap,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: theme.colorScheme.onSurface,
-          ),
-        ),
-      ],
     );
   }
 }

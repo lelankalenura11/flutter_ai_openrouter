@@ -304,12 +304,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _exportData(BuildContext context) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final settingsProvider = context.read<SettingsProvider>();
+    final chatProvider = context.read<ChatProvider>();
 
     settingsProvider.setExporting(true);
 
     try {
       // Get the database from ChatProvider (same AppDatabase instance)
-      final chatProvider = context.read<ChatProvider>();
       final db = chatProvider.database;
       
       final service = ExportImportService(db);
@@ -348,6 +348,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _importData(BuildContext context) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final settingsProvider = context.read<SettingsProvider>();
+    final chatProvider = context.read<ChatProvider>();
 
     try {
       // Pick a .zip file
@@ -363,7 +364,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       settingsProvider.setImporting(true);
 
-      final chatProvider = context.read<ChatProvider>();
       final db = chatProvider.database;
 
       final service = ExportImportService(db);
@@ -372,18 +372,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Reload chats to reflect imported data
       await chatProvider.loadChats();
 
-      if (context.mounted) {
-        scaffoldMessenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Import complete: ${importResult.totalItems} items '
-              '(${importResult.chats} chats, ${importResult.messages} messages, '
-              '${importResult.folders} folders, ${importResult.skills} skills)',
-            ),
-            duration: const Duration(seconds: 5),
+      if (!context.mounted) return;
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Import complete: ${importResult.totalItems} items '
+            '(${importResult.chats} chats, ${importResult.messages} messages, '
+            '${importResult.folders} folders, ${importResult.skills} skills)',
           ),
-        );
-      }
+          duration: const Duration(seconds: 5),
+        ),
+      );
     } catch (e) {
       if (context.mounted) {
         scaffoldMessenger.showSnackBar(

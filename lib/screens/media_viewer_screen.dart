@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// Full-screen media viewer with pinch-to-zoom and swipe-to-dismiss.
 /// Opens when tapping on an image attachment in the chat.
@@ -33,9 +34,9 @@ class MediaViewerScreen extends StatelessWidget {
             icon: const Icon(Icons.share),
             tooltip: 'Share',
             onPressed: () {
-              // TODO: Implement share functionality in phase 6 (export/import)
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Share coming soon')),
+              Share.shareXFiles(
+                [XFile(filePath)],
+                text: title,
               );
             },
           ),
