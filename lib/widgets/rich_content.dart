@@ -253,77 +253,20 @@ class RichContent extends StatelessWidget {
   }
 }
 
-/// A stateful widget that wraps a child in a horizontally-scrollable container
-/// with a [Scrollbar] that only shows when the content actually overflows.
-///
-/// Each instance owns its own [ScrollController] to avoid "no ScrollPosition
-/// attached" assertions that occur when using [PrimaryScrollController] with
-/// non-scrolling content.
-class _MathScrollable extends StatefulWidget {
+/// A lightweight widget that wraps a child in a horizontally-scrollable container.
+/// Scales down oversized content with FittedBox, and clips it to prevent
+/// overflowing the message bubble boundary.
+class _MathScrollable extends StatelessWidget {
   final Widget child;
-
   const _MathScrollable({required this.child});
 
   @override
-  State<_MathScrollable> createState() => _MathScrollableState();
-}
-
-class _MathScrollableState extends State<_MathScrollable> {
-  final ScrollController _scrollController = ScrollController();
-  bool _hasOverflow = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _scrollController.addListener(_onScrollChanged);
-    // Check overflow right after the first frame renders
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
-  }
-
-  @override
-  void dispose() {
-    _scrollController.removeListener(_onScrollChanged);
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _checkOverflow() {
-    if (!_scrollController.hasClients) return;
-    setState(() {
-      _hasOverflow = _scrollController.position.maxScrollExtent > 0;
-    });
-  }
-
-  void _onScrollChanged() {
-    if (!_scrollController.hasClients) return;
-    final newOverflow = _scrollController.position.maxScrollExtent > 0;
-    if (newOverflow != _hasOverflow) {
-      setState(() {
-        _hasOverflow = newOverflow;
-      });
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return Scrollbar(
-      controller: _scrollController,
-      thumbVisibility: _hasOverflow,
-      thickness: 4.0,
-      radius: const Radius.circular(4),
-      child: Padding(
-        // Reserve space at the bottom so the scrollbar doesn't overlap the equation
-        padding: const EdgeInsets.only(bottom: 6.0),
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          scrollDirection: Axis.horizontal,
-          child: LayoutBuilder(
-            builder: (context, constraints) => FittedBox(
-              fit: BoxFit.scaleDown,
-              child: widget.child,
-            ),
-          ),
-        ),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: child,
       ),
     );
   }

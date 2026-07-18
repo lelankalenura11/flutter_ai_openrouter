@@ -59,6 +59,15 @@ extension ChatQueries on AppDatabase {
   Future<void> deleteChat(String id) =>
       (delete(chatsTable)..where((t) => t.id.equals(id))).go();
 
+  Future<void> deleteAllChats() async {
+    // Delete all messages, stars, embeddings, chats, and folders
+    await delete(messagesTable).go();
+    await delete(starsTable).go();
+    await delete(messageEmbeddingsTable).go();
+    await delete(chatsTable).go();
+    await delete(foldersTable).go();
+  }
+
   Future<void> moveChatToFolder(String chatId, String? folderId) async {
     await (update(chatsTable)..where((t) => t.id.equals(chatId))).write(
       ChatsTableCompanion(

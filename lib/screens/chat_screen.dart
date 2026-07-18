@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
+import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
@@ -63,6 +64,10 @@ class _ChatScreenState extends State<ChatScreen> {
   // Inline attachment bar (stays above keyboard, no bottom sheet)
   bool _showAttachmentBar = false;
 
+  // Drawer search
+  final _drawerSearchController = TextEditingController();
+  String _drawerSearchQuery = '';
+
   @override
   void initState() {
     super.initState();
@@ -79,6 +84,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _drawerSearchController.dispose();
     super.dispose();
   }
 
@@ -609,22 +615,27 @@ class _ChatScreenState extends State<ChatScreen> {
                         final isSearchHighlight = _isSearching &&
                             _searchMatchIndices.contains(index) &&
                             _searchMatchIndices[_currentSearchIndex.clamp(0, _searchMatchIndices.length - 1)] == index;
-                        return MessageBubble(
-                          message: msg,
-                          isStarred: chatProvider.isMessageStarred(msg.id),
-                          showRetry: isFailed && msg.role == 'user',
-                          highlight: isSearchHighlight,
-                          onCopy: () {
-                            Clipboard.setData(ClipboardData(text: msg.content));
-                            _showTopSnackBar(context, 'Message copied');
-                          },
-                          onStar: () => chatProvider.toggleStar(msg.id),
-                          onRetry: isFailed
-                              ? () => chatProvider.retryMessage(msg.id)
-                              : null,
-                          onFork: (msg.role == 'user' || msg.role == 'assistant')
-                              ? () => _forkChat(chatProvider, msg.id)
-                              : null,
+                        return RepaintBoundary(
+                          key: ValueKey('bubble_${msg.id}'),
+                          child: MessageBubble(
+                            key: ValueKey(msg.id),
+                            message: msg,
+                            isStarred: chatProvider.isMessageStarred(msg.id),
+                            showRetry: isFailed && msg.role == 'user',
+                            highlight: isSearchHighlight,
+                            searchQuery: _isSearching ? _searchController.text : null,
+                            onCopy: () {
+                              Clipboard.setData(ClipboardData(text: msg.content));
+                              _showTopSnackBar(context, 'Message copied');
+                            },
+                            onStar: () => chatProvider.toggleStar(msg.id),
+                            onRetry: isFailed
+                                ? () => chatProvider.retryMessage(msg.id)
+                                : null,
+                            onFork: (msg.role == 'user' || msg.role == 'assistant')
+                                ? () => _forkChat(chatProvider, msg.id)
+                                : null,
+                          ),
                         );
                       },
                     );
@@ -1039,6 +1050,35 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
+              // Drawer search bar
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: TextField(
+                  controller: _drawerSearchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search chats...',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _drawerSearchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _drawerSearchController.clear();
+                              setState(() => _drawerSearchQuery = '');
+                            },
+                          )
+                        : null,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    filled: true,
+                    fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    isDense: true,
+                  ),
+                  onChanged: (value) => setState(() => _drawerSearchQuery = value),
+                ),
+              ),
               // New Chat
               ListTile(
                 leading: const Icon(Icons.add),
@@ -1048,79 +1088,89 @@ class _ChatScreenState extends State<ChatScreen> {
                   chatProvider.createChat();
                 },
               ),
-              // Starred messages
-              ListTile(
-                leading: const Icon(Icons.star, color: Colors.amber),
-                title: const Text('Starred'),
-                trailing: chatProvider.starredMessages.isNotEmpty
-                    ? Chip(
-                        label: Text(
-                          '${chatProvider.starredMessages.length}',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        visualDensity: VisualDensity.compact,
-                      )
-                    : null,
-                onTap: () {
-                  Navigator.pop(context);
-                  _showStarredMessages(context);
-                },
-              ),
-              const Divider(),
-              // Folders section
-              ...chatProvider.folders.map((folder) => ExpansionTile(
-                    leading: const Icon(Icons.folder),
-                    title: Text(folder.name),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit, size: 16),
-                          onPressed: () =>
-                              _showRenameFolderDialog(context, folder.id, folder.name),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 16),
-                          onPressed: () {
-                            chatProvider.deleteFolder(folder.id);
-                            Navigator.pop(context);
-                          },
-                        ),
-                      ],
+              // Drawer content: search results or normal structure
+              if (_drawerSearchQuery.isNotEmpty)
+                ..._buildDrawerSearchResults(chatProvider)
+              else ...[
+                // Starred messages
+                ListTile(
+                  leading: const Icon(Icons.star, color: Colors.amber),
+                  title: const Text('Starred'),
+                  trailing: chatProvider.starredMessages.isNotEmpty
+                      ? Chip(
+                          label: Text(
+                            '${chatProvider.starredMessages.length}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        )
+                      : null,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showStarredMessages(context);
+                  },
+                ),
+                // Folders section (collapsible parent)
+                ExpansionTile(
+                  leading: const Icon(Icons.folder),
+                  title: Text('Folders${chatProvider.folders.isNotEmpty ? ' (${chatProvider.folders.length})' : ''}'),
+                  initiallyExpanded: false,
+                  children: [
+                    // Individual folders
+                    ...chatProvider.folders.map((folder) {
+                      final folderChatCount = chatProvider.getChatsByFolder(folder.id).length;
+                      return ExpansionTile(
+                          leading: const Icon(Icons.folder_open, size: 20),
+                          title: Text('${folder.name} ($folderChatCount)'),
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 18),
+                            onSelected: (value) {
+                              if (value == 'rename') {
+                                _showRenameFolderDialog(context, folder.id, folder.name);
+                              } else if (value == 'delete') {
+                                chatProvider.deleteFolder(folder.id);
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                            ],
+                          ),
+                          initiallyExpanded: false,
+                          children: chatProvider
+                              .getChatsByFolder(folder.id)
+                              .map((chat) => _buildChatTile(chatProvider, chat))
+                              .toList(),
+                        );
+                    }),
+                    // New Folder button inside collapsible section
+                    ListTile(
+                      leading: const Icon(Icons.create_new_folder_outlined),
+                      title: const Text('New Folder'),
+                      onTap: () {
+                        _showCreateFolderDialog(context);
+                      },
                     ),
-                    initiallyExpanded: false,
-                    children: chatProvider
-                        .getChatsByFolder(folder.id)
-                        .map((chat) => _buildChatTile(chatProvider, chat))
-                        .toList(),
-                  )),
-              // Root folder (no folder) — only show if there are unfiled chats
-              if (chatProvider.getChatsByFolder(null).isNotEmpty) ...[
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: Text(
-                    'Unfiled',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.grey,
+                  ],
+                ),
+                // Root folder (no folder) — only show if there are unfiled chats
+                if (chatProvider.getChatsByFolder(null).isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Text(
+                      'Unfiled',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey,
+                      ),
                     ),
                   ),
-                ),
-                ...chatProvider
-                    .getChatsByFolder(null)
-                    .map((chat) => _buildChatTile(chatProvider, chat)),
+                  ...chatProvider
+                      .getChatsByFolder(null)
+                      .map((chat) => _buildChatTile(chatProvider, chat)),
+                ],
               ],
-              const Divider(),
-              // Add folder button
-              ListTile(
-                leading: const Icon(Icons.create_new_folder_outlined),
-                title: const Text('New Folder'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showCreateFolderDialog(context);
-                },
-              ),
             ],
           );
         },
@@ -1128,7 +1178,46 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildChatTile(ChatProvider chatProvider, chat) {
+  /// Build search results list when user types in the drawer search bar.
+  List<Widget> _buildDrawerSearchResults(ChatProvider chatProvider) {
+    final query = _drawerSearchQuery.toLowerCase().trim();
+    if (query.isEmpty) return [];
+
+    final matchingChats = chatProvider.chats
+        .where((c) => c.title.toLowerCase().contains(query))
+        .toList();
+
+    if (matchingChats.isEmpty) {
+      return [
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: Center(
+            child: Text(
+              'No chats found',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    return [
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: Text(
+          '${matchingChats.length} result${matchingChats.length == 1 ? '' : 's'}',
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Colors.grey,
+          ),
+        ),
+      ),
+      ...matchingChats.map((chat) => _buildChatTile(chatProvider, chat)),
+    ];
+  }
+
+  Widget _buildChatTile(ChatProvider chatProvider, ChatsTableData chat) {
     final isGenerating = chatProvider.isChatGenerating(chat.id);
     return ListTile(
       dense: true,

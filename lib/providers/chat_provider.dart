@@ -49,6 +49,14 @@ class ChatProvider extends ChangeNotifier {
   String? _streamingMessageId;
   String? _streamingChatId;
 
+  // Token debouncing — buffer rapid token updates to avoid rebuilding UI per token
+  Timer? _debounceTimer;
+  String _debounceBuffer = '';
+  bool _debounceNeedsFlush = false;
+  static const Duration _debounceInterval = Duration(milliseconds: 80);
+  // Track the assistant message ID for the current debounce cycle
+  String? _debounceAssistantId;
+
   // Chats
   List<ChatsTableData> _chats = [];
   List<MessagesTableData> _messages = [];
@@ -108,6 +116,23 @@ class ChatProvider extends ChangeNotifier {
   AppDatabase get database => _db;
 
   ChatProvider(this._db, this._openRouterService, this._embeddingService);
+
+  /// Flush buffered tokens to the UI by updating the in-memory message.
+  void _flushDebounce() {
+    _debounceNeedsFlush = false;
+    _debounceBuffer = '';
+
+    final msgId = _debounceAssistantId;
+    if (msgId == null) return;
+
+    final idx = _messages.indexWhere((m) => m.id == msgId);
+    if (idx != -1) {
+      _messages[idx] = _messages[idx].copyWith(
+        content: _streamingContent,
+      );
+      notifyListeners();
+    }
+  }
 
   ChatsTableData? get currentChat {
     if (_currentChatId == null) return null;
@@ -329,6 +354,48 @@ class ChatProvider extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+
+    // Retry auto-title if still default placeholder and streaming is not in progress.
+    // This handles cases where the original _autoTitleChat call failed
+    // (e.g. app was backgrounded when the response completed).
+    if (_streamingChatId != id) {
+      final chat = currentChat;
+      final title = chat?.title;
+      if ((title == 'New Chat' || title == 'Forked chat') &&
+          _messages.any((m) => m.role == 'assistant' && m.status == 'sent')) {
+        final firstUser = _messages.where((m) => m.role == 'user').firstOrNull;
+        final firstAssistant =
+            _messages.where((m) => m.role == 'assistant' && m.status == 'sent').firstOrNull;
+        if (firstUser != null && firstAssistant != null) {
+          _autoTitleChat(id, firstUser.content, firstAssistant.content);
+        }
+      }
+    }
+  }
+
+  Future<void> deleteAllChats() async {
+    try {
+      await _db.deleteAllChats();
+      _chats = [];
+      _folders = [];
+      _messages = [];
+      _currentChatId = null;
+      _starredMessageIds = {};
+      _starredMessages = [];
+      _starredWithChatInfo = [];
+      _failedMessageIds = {};
+      _streamingMessageId = null;
+      _streamingChatId = null;
+      _streamingContent = '';
+      _streamingReasoning = null;
+      _streamingInputTokens = null;
+      _streamingOutputTokens = null;
+      _isSending = false;
+      notifyListeners();
+    } catch (e) {
+      _error = _friendlyError(e);
+      notifyListeners();
+    }
   }
 
   Future<void> deleteChat(String id) async {
@@ -603,6 +670,8 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
+        // Update streaming chat ID now that we have a real chat ID
+        _streamingChatId = _currentChatId;
       }
 
       final settings = await _db.getSettings();
@@ -833,12 +902,19 @@ class ChatProvider extends ChangeNotifier {
         includeReasoning: true,
         onToken: (token) {
           _streamingContent += token;
-          final idx = _messages.indexWhere((m) => m.id == assistantId);
-          if (idx != -1) {
-            _messages[idx] = _messages[idx].copyWith(
-              content: _streamingContent,
-            );
-            notifyListeners();
+          _debounceBuffer += token;
+          _debounceAssistantId = assistantId;
+
+          // If no pending flush, schedule one
+          if (!_debounceNeedsFlush) {
+            _debounceNeedsFlush = true;
+            _debounceTimer?.cancel();
+            // If buffer gets large before interval, flush immediately
+            if (_debounceBuffer.length > 200) {
+              _flushDebounce();
+            } else {
+              _debounceTimer = Timer(_debounceInterval, _flushDebounce);
+            }
           }
         },
         onComplete: (response) async {

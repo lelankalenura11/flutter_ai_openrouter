@@ -10,6 +10,8 @@ import 'package:flutter_ai_chat_app_openrouter/providers/settings_provider.dart'
 import 'package:flutter_ai_chat_app_openrouter/providers/skill_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/chat_screen.dart';
 
+final AppDatabase _database = AppDatabase();
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
@@ -22,20 +24,19 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     // Create services
     final authService = AuthService();
-    final database = AppDatabase();
     final openRouterService = OpenRouterService(authService);
     final embeddingService = EmbeddingService(authService);
 
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (_) => ChatProvider(database, openRouterService, embeddingService),
+          create: (_) => ChatProvider(_database, openRouterService, embeddingService),
         ),
         ChangeNotifierProvider(
-          create: (_) => SettingsProvider(database, authService, openRouterService),
+          create: (_) => SettingsProvider(_database, authService, openRouterService),
         ),
         ChangeNotifierProvider(
-          create: (_) => SkillProvider(database),
+          create: (_) => SkillProvider(_database),
         ),
       ],
       child: const AppWithTheme(),

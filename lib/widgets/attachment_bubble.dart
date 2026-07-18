@@ -53,14 +53,18 @@ class AttachmentBubble extends StatelessWidget {
           onTap: () => _openMediaViewer(context),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.file(
-              file,
-              width: 240,
-              height: 180,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return _buildFallbackIcon(theme, fileName, fileSize);
-              },
+            child: RepaintBoundary(
+              child: Image.file(
+                file,
+                width: 240,
+                height: 180,
+                fit: BoxFit.cover,
+                cacheWidth: 480,
+                cacheHeight: 360,
+                errorBuilder: (context, error, stackTrace) {
+                  return _buildFallbackIcon(theme, fileName, fileSize);
+                },
+              ),
             ),
           ),
         ),

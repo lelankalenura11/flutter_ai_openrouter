@@ -92,6 +92,11 @@ class MessageBubble extends StatelessWidget {
     this.searchQuery,
   });
 
+  /// Compute the max bubble width once instead of calling MediaQuery per frame.
+  static double _maxBubbleWidth(BuildContext context) {
+    return MediaQuery.of(context).size.width * 0.75;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == 'user';
@@ -124,10 +129,9 @@ class MessageBubble extends StatelessWidget {
               crossAxisAlignment:
                   isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
+                Container(
                   constraints: BoxConstraints(
-                    maxWidth: MediaQuery.of(context).size.width * 0.75,
+                    maxWidth: _maxBubbleWidth(context),
                   ),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(

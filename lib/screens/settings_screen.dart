@@ -319,6 +319,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _confirmDeleteAllChats(context),
+                          icon: const Icon(Icons.delete_forever, color: Colors.red),
+                          label: const Text(
+                            'Delete All Chats',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Colors.red),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Permanently deletes all chats, messages, stars, folders, and embeddings. '
+                        'Settings and skills are preserved. This cannot be undone.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.error.withValues(alpha: 0.7),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -328,6 +354,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _confirmDeleteAllChats(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete All Chats'),
+        content: const Text(
+          'This will permanently delete all your chats, messages, stars, and embeddings. '
+          'Your settings and skills will be kept.\n\n'
+          'This action cannot be undone. Are you sure?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete Everything'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && context.mounted) {
+      await context.read<ChatProvider>().deleteAllChats();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('All chats deleted')),
+        );
+      }
+    }
   }
 
   Future<void> _exportData(BuildContext context) async {
