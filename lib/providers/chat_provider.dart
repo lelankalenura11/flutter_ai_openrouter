@@ -412,7 +412,6 @@ class ChatProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
-
   Future<void> renameChat(String chatId, String title) async {
     try {
       await _db.renameChat(chatId, title);

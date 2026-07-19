@@ -14,11 +14,12 @@ import 'package:flutter_ai_chat_app_openrouter/screens/skills_screen.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/file_compression_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/audio_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/services/video_service.dart';
-import 'package:flutter_ai_chat_app_openrouter/main.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/search_provider.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/clipboard_service.dart';
+import 'package:image/image.dart' as img;
 
 /// Helper to show a top-of-screen notification banner
-void _showTopSnackBar(BuildContext context, String message) {
+void showTopSnackBar(BuildContext context, String message) {
   final overlay = Overlay.of(context);
   late OverlayEntry entry;
   entry = OverlayEntry(
@@ -50,36 +51,27 @@ class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<ChatScreen> createState() => ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
-  final _messageController = TextEditingController();
-  // AutoScrollController is a regular ScrollController (so _onScroll /
-  // _scrollToBottom work exactly like before) plus scrollToIndex(), which
-  // scrolls incrementally to build+reveal an item even if it's currently
-  // far outside the viewport.
-  final AutoScrollController _scrollController = AutoScrollController();
-  bool _showScrollToBottom = false;
+class ChatScreenState extends State<ChatScreen> {
+  final messageController = TextEditingController();
+  final AutoScrollController scrollController = AutoScrollController(
+    suggestedRowHeight: 120,
+  );
 
-  // Search state — ChatSearchNotifier is the single source of truth for matches
-  bool _isSearching = false;
-  final _searchController = TextEditingController();
-  final _searchFocusNode = FocusNode();
-  // Attached (via MessageBubble -> RichContent) to the exact active match's
-  // span, so we can fine-scroll to it inside a long message once the right
-  // bubble has been scrolled into the (real, single) Scrollable's viewport.
-  final GlobalKey _activeMatchKey = GlobalKey();
+  final searchController = TextEditingController();
+  final searchFocusNode = FocusNode();
+  final GlobalKey activeMatchKey = GlobalKey();
 
-  // Inline attachment bar (stays above keyboard, no bottom sheet)
-  bool _showAttachmentBar = false;
+  bool isSearching = false;
+  bool showScrollToBottom = false;
+  bool showAttachmentBar = false;
+  String drawerSearchQuery = '';
+  bool sidebarVisible = true;
 
   // Drawer search
   final _drawerSearchController = TextEditingController();
-  String _drawerSearchQuery = '';
-
-  // Sidebar toggle (desktop)
-  bool _sidebarVisible = true;
 
   @override
   void initState() {
@@ -87,38 +79,40 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ChatProvider>().loadChats();
     });
-    _scrollController.addListener(_onScroll);
+    scrollController.addListener(onScroll);
   }
 
   @override
   void dispose() {
-    _messageController.dispose();
-    _scrollController.removeListener(_onScroll);
-    _scrollController.dispose();
-    _searchController.dispose();
-    _searchFocusNode.dispose();
+    messageController.dispose();
+    scrollController.removeListener(onScroll);
+    scrollController.dispose();
+    searchController.dispose();
+    searchFocusNode.dispose();
     _drawerSearchController.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (!_scrollController.hasClients) return;
+  void onScroll() {
+    if (!scrollController.hasClients) return;
+
     final threshold = 200.0;
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    final currentScroll = _scrollController.position.pixels;
-    final isNearBottom = (maxScroll - currentScroll) < threshold;
-    if (isNearBottom != !_showScrollToBottom) {
+    final maxScroll = scrollController.position.maxScrollExtent;
+    final currentScroll = scrollController.position.pixels;
+    final isNearBottom = maxScroll - currentScroll <= threshold;
+
+    if (mounted) {
       setState(() {
-        _showScrollToBottom = !isNearBottom;
+        showScrollToBottom = !isNearBottom;
       });
     }
   }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+      if (scrollController.hasClients) {
+        scrollController.animateTo(
+          scrollController.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -126,91 +120,80 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  /// Handler for desktop keyboard shortcuts dispatched via Notification.
-  void _handleDesktopShortcut(String action) {
-    final chatProvider = context.read<ChatProvider>();
-    switch (action) {
-      case 'new_chat':
-        chatProvider.createChat();
-        break;
-      case 'new_folder':
-        _showCreateFolderDialog(context);
-        break;
-      case 'search':
-        _toggleSearch();
-        break;
-      case 'focus_input':
-        FocusScope.of(context).requestFocus(FocusNode());
-        _messageController.selection = TextSelection.fromPosition(
-          TextPosition(offset: _messageController.text.length),
-        );
-        break;
-      case 'escape':
-        if (_isSearching) {
-          _toggleSearch();
-        }
-        break;
-      case 'copy_message':
-        // Copy the last message from the current chat
-        final msgs = chatProvider.messages;
-        if (msgs.isNotEmpty) {
-          final lastMsg = msgs.last;
-          Clipboard.setData(ClipboardData(text: lastMsg.content));
-          _showTopSnackBar(context, 'Last message copied');
-        }
-        break;
-    }
-  }
-
   // ============================================================================
-  // SEARCH — FIXED
+  // SEARCH
   // ============================================================================
 
-  void _toggleSearch() {
+  void toggleSearch() {
     final search = context.read<ChatSearchNotifier>();
-    if (!_isSearching) {
+    if (!isSearching) {
       search.enterSearch();
-      _searchFocusNode.requestFocus();
+      searchFocusNode.requestFocus();
     } else {
       search.exitSearch();
-      _searchController.clear();
+      searchController.clear();
+      search.clear();
     }
-    setState(() => _isSearching = !_isSearching);
+    setState(() => isSearching = !isSearching);
   }
 
-  void _onSearchChanged(String query) {
+  void onSearchChanged(String query) {
     final chatProvider = context.read<ChatProvider>();
     final search = context.read<ChatSearchNotifier>();
     search.setQuery(query, chatProvider.messages);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentMatch());
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scrollToCurrentMatch();
+    });
   }
 
-  Future<void> _scrollToCurrentMatch() async {
+  bool isFullyVisible(BuildContext target) {
+    final renderObject = target.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.attached) return false;
+
+    final scrollableState = Scrollable.maybeOf(target);
+    final scrollableRenderObject = scrollableState?.context.findRenderObject();
+    if (scrollableState == null || scrollableRenderObject is! RenderBox) {
+      return true;
+    }
+
+    final topLeft = renderObject.localToGlobal(
+      Offset.zero,
+      ancestor: scrollableRenderObject,
+    );
+    final bottomRight = renderObject.localToGlobal(
+      renderObject.size.bottomRight(Offset.zero),
+      ancestor: scrollableRenderObject,
+    );
+
+    return topLeft.dy >= 0 && bottomRight.dy <= scrollableRenderObject.size.height;
+  }
+
+  Future<void> scrollToCurrentMatch() async {
+    if (!mounted) return;
+
     final search = context.read<ChatSearchNotifier>();
-    if (!search.hasMatches || search.currentMatchIndex < 0) return;
-    final match = search.matches[search.currentMatchIndex];
+    final currentMatch = search.currentMatch;
+    if (currentMatch == null) return;
 
     final chatProvider = context.read<ChatProvider>();
-    final msgIdx = chatProvider.messages.indexWhere((m) => m.id == match.messageId);
+    final msgIdx = chatProvider.messages.indexWhere(
+      (m) => m.id == currentMatch.messageId,
+    );
     if (msgIdx == -1) return;
 
-    // Coarse step: scroll incrementally until the target message is actually
-    // built (scrollToIndex re-checks and corrects as it goes, so it works
-    // even when the message is far outside the current viewport).
-    await _scrollController.scrollToIndex(
+    await scrollController.scrollToIndex(
       msgIdx,
       preferPosition: AutoScrollPosition.middle,
       duration: const Duration(milliseconds: 250),
     );
+
     if (!mounted) return;
 
-    // Fine step: now that the bubble is guaranteed to be built, scroll to
-    // the exact occurrence within it. Unlike scrollable_positioned_list,
-    // this list uses one real Scrollable, so ensureVisible reliably finds
-    // and scrolls it — this is what handles multiple matches inside the
-    // same (possibly long) message.
-    final activeContext = _activeMatchKey.currentContext;
-    if (activeContext != null && activeContext.mounted) {
+    await WidgetsBinding.instance.endOfFrame;
+
+    final activeContext = activeMatchKey.currentContext;
+    if (activeContext != null && activeContext.mounted && !isFullyVisible(activeContext)) {
       await Scrollable.ensureVisible(
         activeContext,
         duration: const Duration(milliseconds: 200),
@@ -220,14 +203,18 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _nextSearchMatch() {
+  void nextSearchMatch() {
     context.read<ChatSearchNotifier>().nextMatch();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentMatch());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scrollToCurrentMatch();
+    });
   }
 
-  void _prevSearchMatch() {
+  void prevSearchMatch() {
     context.read<ChatSearchNotifier>().previousMatch();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentMatch());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scrollToCurrentMatch();
+    });
   }
 
   // ============================================================================
@@ -235,13 +222,16 @@ class _ChatScreenState extends State<ChatScreen> {
   // ============================================================================
 
   Future<void> _sendMessage() async {
-    final text = _messageController.text.trim();
+    final text = messageController.text.trim();
     if (text.isEmpty) return;
 
     final chatProvider = context.read<ChatProvider>();
-    _messageController.clear();
+    messageController.clear();
 
     await chatProvider.sendMessage(text);
+    if (mounted) {
+      setState(() => showAttachmentBar = false);
+    }
     _scrollToBottom();
   }
 
@@ -252,7 +242,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Toggle the inline attachment bar above the keyboard.
   void _toggleAttachmentBar() {
     setState(() {
-      _showAttachmentBar = !_showAttachmentBar;
+      showAttachmentBar = !showAttachmentBar;
     });
   }
 
@@ -263,7 +253,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// ImagePicker handles the native camera permission dialog automatically.
   Future<void> _pickFromCamera() async {
     if (!_canUseCamera) {
-      _showTopSnackBar(context, 'Camera is not available on Windows');
+      showTopSnackBar(context, 'Camera is not available on Windows');
       return;
     }
     try {
@@ -288,7 +278,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context.read<ChatProvider>().setPendingAttachment(attachment);
     } catch (e) {
       if (mounted) {
-        _showTopSnackBar(context, 'Could not open camera. Check camera permissions in Settings.');
+        showTopSnackBar(context, 'Could not open camera. Check camera permissions in Settings.');
       }
     }
   }
@@ -318,7 +308,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context.read<ChatProvider>().setPendingAttachment(attachment);
     } catch (e) {
       if (mounted) {
-        _showTopSnackBar(context, 'Could not open gallery. Check storage permissions in Settings.');
+        showTopSnackBar(context, 'Could not open gallery. Check storage permissions in Settings.');
       }
     }
   }
@@ -340,7 +330,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final durationExceeded = await VideoService.checkDuration(xfile.path);
       if (durationExceeded != null) {
         if (mounted) {
-          _showTopSnackBar(
+          showTopSnackBar(
             context,
             'Video too long ($durationExceeded.formattedDuration). Maximum is $maxVideoDurationSeconds seconds.',
           );
@@ -362,7 +352,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     } catch (e) {
       if (mounted) {
-        _showTopSnackBar(context, 'Could not pick video: $e');
+        showTopSnackBar(context, 'Could not pick video: $e');
       }
     }
   }
@@ -394,7 +384,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context.read<ChatProvider>().setPendingAttachment(attachment);
     } catch (e) {
       if (mounted) {
-        _showTopSnackBar(context, 'Could not pick PDF file');
+        showTopSnackBar(context, 'Could not pick PDF file');
       }
     }
   }
@@ -409,7 +399,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Show the recording bottom sheet.
   void _showRecordingSheet() {
     if (!_canRecordAudio) {
-      _showTopSnackBar(context, 'Audio recording is not available on Windows');
+      showTopSnackBar(context, 'Audio recording is not available on Windows');
       return;
     }
     final audioService = AudioRecorderService();
@@ -519,7 +509,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               isRecording = false;
                             });
                             if (mounted) {
-                              _showTopSnackBar(this.context, 'Could not start recording: $e');
+                              showTopSnackBar(this.context, 'Could not start recording: $e');
                             }
                           }
                         }
@@ -585,19 +575,19 @@ class _ChatScreenState extends State<ChatScreen> {
       Navigator.pop(context); // dismiss loading dialog
 
       if (transcribedText != null && transcribedText.isNotEmpty) {
-        _messageController.text = transcribedText;
+        messageController.text = transcribedText;
         // Move cursor to end
-        _messageController.selection = TextSelection.fromPosition(
+        messageController.selection = TextSelection.fromPosition(
           TextPosition(offset: transcribedText.length),
         );
-        _showTopSnackBar(context, 'Transcription complete');
+        showTopSnackBar(context, 'Transcription complete');
       } else {
-        _showTopSnackBar(context, 'Transcription failed. Check your API key and try again.');
+        showTopSnackBar(context, 'Transcription failed. Check your API key and try again.');
       }
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context); // dismiss loading dialog
-      _showTopSnackBar(context, 'Transcription failed: ${e.toString()}');
+      showTopSnackBar(context, 'Transcription failed: ${e.toString()}');
     } finally {
       // Delete the temporary audio file
       try {
@@ -616,20 +606,54 @@ class _ChatScreenState extends State<ChatScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final showPersistentSidebar = isDesktop && screenWidth >= 900;
 
-    // Listen for desktop keyboard shortcut notifications
-    return NotificationListener<DesktopShortcutNotification>(
-      onNotification: (notification) {
-        _handleDesktopShortcut(notification.action);
-        return true;
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (FocusNode node, KeyEvent event) {
+        if (event is KeyDownEvent && HardwareKeyboard.instance.isControlPressed) {
+          switch (event.logicalKey) {
+            case LogicalKeyboardKey.keyN:
+              // Ctrl+N = new chat (Shift+Ctrl+N = new folder)
+              if (HardwareKeyboard.instance.isShiftPressed) {
+                _showCreateFolderDialog(context);
+              } else {
+                context.read<ChatProvider>().createChat();
+              }
+              return KeyEventResult.handled;
+            case LogicalKeyboardKey.keyF:
+              toggleSearch();
+              return KeyEventResult.handled;
+            case LogicalKeyboardKey.keyE:
+              messageController.selection = TextSelection.fromPosition(
+                TextPosition(offset: messageController.text.length),
+              );
+              return KeyEventResult.handled;
+            case LogicalKeyboardKey.keyV:
+              _handlePasteClipboard();
+              return KeyEventResult.handled;
+            case LogicalKeyboardKey.keyC:
+              if (HardwareKeyboard.instance.isShiftPressed) {
+                _handleCopyMessage();
+                return KeyEventResult.handled;
+              }
+              break;
+          }
+        }
+        if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
+          if (isSearching) {
+            toggleSearch();
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
       },
       child: Scaffold(
-          appBar: _isSearching ? _buildSearchAppBar(theme) : _buildNormalAppBar(theme, isDesktop, showPersistentSidebar),
+          appBar: isSearching ? buildSearchAppBar(theme) : _buildNormalAppBar(theme, isDesktop, showPersistentSidebar),
           drawer: showPersistentSidebar ? null : _buildChatListDrawer(context),
           // On desktop with wide screen, use a persistent sidebar
           body: Row(
             children: [
               // Collapsible persistent sidebar on desktop
-              if (showPersistentSidebar && _sidebarVisible)
+              if (showPersistentSidebar && sidebarVisible)
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   width: 280,
@@ -689,9 +713,6 @@ class _ChatScreenState extends State<ChatScreen> {
                             },
                           ),
                           // Messages
-                          // ============================================================================
-                          // SEARCH FIX: Use Consumer2 to rebuild on both ChatProvider and ChatSearchNotifier changes
-                          // ============================================================================
                           Expanded(
                             child: Consumer2<ChatProvider, ChatSearchNotifier>(
                               builder: (context, chatProvider, search, _) {
@@ -700,7 +721,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 }
 
                                 if (chatProvider.currentChatId == null) {
-                                  return _buildWelcomeMessage(context);
+                                  return buildWelcomeMessage(context);
                                 }
 
                                 final messages = chatProvider.messages;
@@ -708,47 +729,53 @@ class _ChatScreenState extends State<ChatScreen> {
                                   return const Center(child: Text('Start a conversation!'));
                                 }
 
+                                final currentMatch = search.currentMatch;
+
                                 return ListView.builder(
-                                  controller: _scrollController,
+                                  controller: scrollController,
                                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                                   itemCount: messages.length,
                                   itemBuilder: (context, index) {
                                     final msg = messages[index];
                                     final isFailed = msg.status == 'failed';
 
-                                    // Rebuilds when search changes because we're inside Consumer2
-                                    final currentMatch = search.hasMatches && search.currentMatchIndex >= 0
-                                        ? search.matches[search.currentMatchIndex]
-                                        : null;
                                     final isSearchHighlight =
-                                        _isSearching && currentMatch != null && currentMatch.messageId == msg.id;
+                                        isSearching &&
+                                        currentMatch != null &&
+                                        currentMatch.messageId == msg.id;
 
                                     return AutoScrollTag(
-                                      key: ValueKey('scrolltag_${msg.id}'),
-                                      controller: _scrollController,
+                                      key: ValueKey('scrolltag-${msg.id}'),
+                                      controller: scrollController,
                                       index: index,
                                       child: RepaintBoundary(
-                                        key: ValueKey('bubble_${msg.id}'),
+                                        key: ValueKey('bubble-${msg.id}'),
                                         child: MessageBubble(
-                                          key: ValueKey('msgwidget_${msg.id}'),
+                                          key: ValueKey('msgwidget-${msg.id}'),
                                           message: msg,
                                           activeMatchStart: isSearchHighlight ? currentMatch.start : null,
                                           activeMatchEnd: isSearchHighlight ? currentMatch.end : null,
-                                          activeMatchKey: isSearchHighlight ? _activeMatchKey : null,
+                                          activeMatchKey: isSearchHighlight ? activeMatchKey : null,
                                           isStarred: chatProvider.isMessageStarred(msg.id),
                                           showRetry: isFailed && msg.role == 'user',
                                           highlight: isSearchHighlight,
-                                          searchQuery: _isSearching ? _searchController.text : null,
+                                          searchQuery: isSearching ? searchController.text : null,
                                           onCopy: () {
                                             Clipboard.setData(ClipboardData(text: msg.content));
-                                            _showTopSnackBar(context, 'Message copied');
+                                            showTopSnackBar(context, 'Message copied');
                                           },
                                           onStar: () => chatProvider.toggleStar(msg.id),
                                           onRetry: isFailed
                                               ? () => chatProvider.retryMessage(msg.id)
                                               : null,
                                           onFork: (msg.role == 'user' || msg.role == 'assistant')
-                                              ? () => _forkChat(chatProvider, msg.id)
+                                              ? () => forkChat(chatProvider, msg.id)
+                                              : null,
+                                          onRegenerate: msg.role == 'assistant' && msg.status == 'sent'
+                                              ? () => _handleRegenerate(chatProvider, msg.id)
+                                              : null,
+                                          onEdit: msg.role == 'user' && msg.status == 'sent'
+                                              ? () => _handleEditMessage(chatProvider, msg)
                                               : null,
                                         ),
                                       ),
@@ -798,7 +825,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ],
                       ),
                       // Jump-to-bottom FAB
-                      if (_showScrollToBottom)
+                      if (showScrollToBottom)
                         Positioned(
                           right: 16,
                           bottom: 80,
@@ -819,13 +846,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Handle files dropped from the OS onto the chat area.
-  void _handleDroppedFiles(List<dynamic> files) {
+  Future<void> _handleDroppedFiles(List<DropItem> files) async {
     final chatProvider = context.read<ChatProvider>();
     for (final file in files) {
       final path = file.path;
       final name = file.name;
-      if (path == null) continue;
       final ext = name.split('.').last.toLowerCase();
+      if (ext.isEmpty) continue;
 
       String mimeType;
       String inputType;
@@ -843,19 +870,145 @@ class _ChatScreenState extends State<ChatScreen> {
         inputType = 'file';
       }
 
+      final fileSize = await File(path).length();
+      if (!mounted) return;
       chatProvider.setPendingAttachment(
         FileAttachment(
           path: path,
           name: name,
           originalName: name,
           mimeType: mimeType,
-          sizeBytes: file.size ?? 0,
+          sizeBytes: fileSize,
           inputType: inputType,
         ),
       );
-      _showTopSnackBar(context, 'File attached: $name');
+      if (!mounted) return;
+      showTopSnackBar(context, 'File attached: $name');
       break; // Only handle the first dropped file for now
     }
+  }
+
+  /// Handle Ctrl+V: first try to paste an image from clipboard.
+  /// If no image is available, falls back to text paste.
+  Future<void> _handlePasteClipboard() async {
+    // 1. Check for image first using the native channel
+    final imageBytes = await ClipboardService.getClipboardImage();
+    
+    if (imageBytes != null) {
+      // Detect format from magic bytes and convert BMP to PNG
+      String extension = 'png';
+      String mimeType = 'image/png';
+      Uint8List finalBytes = imageBytes;
+      
+      if (imageBytes.length >= 2 && imageBytes[0] == 0x42 && imageBytes[1] == 0x4D) {
+        // BMP — convert to PNG for Flutter compatibility
+        final decoded = img.decodeImage(imageBytes);
+        if (decoded != null) {
+          finalBytes = Uint8List.fromList(img.encodePng(decoded));
+        }
+      } else if (imageBytes.length >= 8 && imageBytes[0] == 0x89 && imageBytes[1] == 0x50) {
+        // Already PNG
+      } else if (imageBytes.length >= 3 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8) {
+        extension = 'jpg';
+        mimeType = 'image/jpeg';
+      } else if (imageBytes.length >= 4 && imageBytes[0] == 0x47 && imageBytes[1] == 0x49) {
+        extension = 'gif';
+        mimeType = 'image/gif';
+      } else if (imageBytes.length >= 4 && imageBytes[0] == 0x52 && imageBytes[1] == 0x49) {
+        extension = 'webp';
+        mimeType = 'image/webp';
+      }
+
+      final tempDir = await Directory.systemTemp.createTemp('clipboard_');
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'clipboard_image_$timestamp.$extension';
+      final filePath = '${tempDir.path}/$fileName';
+      final file = File(filePath);
+      await file.writeAsBytes(finalBytes);
+      
+      final fileSize = await file.length();
+      if (!mounted) return;
+      final chatProvider = context.read<ChatProvider>();
+      chatProvider.setPendingAttachment(
+        FileAttachment(
+          path: filePath,
+          name: fileName,
+          originalName: fileName,
+          mimeType: mimeType,
+          sizeBytes: fileSize,
+          inputType: 'image',
+        ),
+      );
+      if (!mounted) return;
+      showTopSnackBar(context, 'Image pasted from clipboard');
+      return;
+    }
+
+    // 2. If no image, fallback to text paste
+    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+    if (clipboardData != null && clipboardData.text!.isNotEmpty) {
+      final currentText = messageController.text;
+      final selection = messageController.selection;
+      final cursorPos = selection.isValid ? selection.baseOffset : currentText.length;
+      final newText = currentText.substring(0, cursorPos) +
+          clipboardData.text! +
+          currentText.substring(cursorPos);
+      messageController.text = newText;
+      messageController.selection = TextSelection.collapsed(
+        offset: cursorPos + clipboardData.text!.length,
+      );
+    }
+  }
+
+  /// Handle Ctrl+Shift+C: copy the last AI message to clipboard.
+  void _handleCopyMessage() {
+    final chatProvider = context.read<ChatProvider>();
+    final msgs = chatProvider.messages;
+    if (msgs.isNotEmpty) {
+      final lastMsg = msgs.last;
+      Clipboard.setData(ClipboardData(text: lastMsg.content));
+      showTopSnackBar(context, 'Last message copied');
+    }
+  }
+
+  /// Handle "Try again" on an AI message — finds the preceding user message and re-sends it.
+  Future<void> _handleRegenerate(ChatProvider chatProvider, String assistantMsgId) async {
+    final messages = chatProvider.messages;
+    final idx = messages.indexWhere((m) => m.id == assistantMsgId);
+    if (idx <= 0) return; // No preceding user message
+
+    // Find the preceding user message
+    for (int i = idx - 1; i >= 0; i--) {
+      if (messages[i].role == 'user') {
+        await chatProvider.retryMessage(messages[i].id);
+        return;
+      }
+    }
+  }
+
+  /// Handle "Edit & Retry" on a user message — copies text and attachment to input without deleting anything.
+  Future<void> _handleEditMessage(ChatProvider chatProvider, MessagesTableData msg) async {
+    messageController.text = msg.content;
+    messageController.selection = TextSelection.fromPosition(
+      TextPosition(offset: msg.content.length),
+    );
+    // Copy attachment to input if present
+    if (msg.attachmentPath != null) {
+      final file = File(msg.attachmentPath!);
+      if (await file.exists()) {
+        chatProvider.setPendingAttachment(
+          FileAttachment(
+            path: msg.attachmentPath!,
+            name: msg.attachmentPath!.split('/').last,
+            originalName: msg.attachmentPath!.split('/').last,
+            mimeType: msg.inputType == 'image' ? 'image/png' : 'application/pdf',
+            sizeBytes: await file.length(),
+            inputType: msg.inputType,
+          ),
+        );
+      }
+    }
+    // No deletion — chat history stays intact
   }
 
   /// Build the persistent sidebar content (desktop-adaptive version of drawer).
@@ -900,12 +1053,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 decoration: InputDecoration(
                   hintText: 'Search chats...',
                   prefixIcon: const Icon(Icons.search, size: 20),
-                  suffixIcon: _drawerSearchQuery.isNotEmpty
+                  suffixIcon: drawerSearchQuery.isNotEmpty
                       ? IconButton(
                           icon: const Icon(Icons.clear, size: 18),
                           onPressed: () {
                             _drawerSearchController.clear();
-                            setState(() => _drawerSearchQuery = '');
+                            setState(() => drawerSearchQuery = '');
                           },
                         )
                       : null,
@@ -918,7 +1071,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   isDense: true,
                 ),
-                onChanged: (value) => setState(() => _drawerSearchQuery = value),
+                onChanged: (value) => setState(() => drawerSearchQuery = value),
               ),
             ),
             // New Chat button
@@ -1019,9 +1172,9 @@ class _ChatScreenState extends State<ChatScreen> {
     return AppBar(
       leading: (isDesktop && showSidebar)
           ? IconButton(
-              icon: Icon(_sidebarVisible ? Icons.menu_open : Icons.menu),
-              tooltip: _sidebarVisible ? 'Close sidebar' : 'Open sidebar',
-              onPressed: () => setState(() => _sidebarVisible = !_sidebarVisible),
+              icon: Icon(sidebarVisible ? Icons.menu_open : Icons.menu),
+              tooltip: sidebarVisible ? 'Close sidebar' : 'Open sidebar',
+              onPressed: () => setState(() => sidebarVisible = !sidebarVisible),
             )
           : null,
       title: Consumer<ChatProvider>(
@@ -1034,16 +1187,16 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       ),
       actions: [
-        if (isDesktop && showSidebar && !_sidebarVisible)
+        if (isDesktop && showSidebar && !sidebarVisible)
           IconButton(
             icon: const Icon(Icons.list),
             tooltip: 'Show chat list',
-            onPressed: () => setState(() => _sidebarVisible = true),
+            onPressed: () => setState(() => sidebarVisible = true),
           ),
         IconButton(
           icon: const Icon(Icons.search),
           tooltip: 'Search',
-          onPressed: _toggleSearch,
+          onPressed: toggleSearch,
         ),
         IconButton(
           icon: const Icon(Icons.psychology_outlined),
@@ -1081,15 +1234,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  PreferredSizeWidget _buildSearchAppBar(ThemeData theme) {
+  PreferredSizeWidget buildSearchAppBar(ThemeData theme) {
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.close),
-        onPressed: _toggleSearch,
+        onPressed: toggleSearch,
       ),
       title: TextField(
-        controller: _searchController,
-        focusNode: _searchFocusNode,
+        controller: searchController,
+        focusNode: searchFocusNode,
         autofocus: true,
         decoration: InputDecoration(
           hintText: 'Search messages...',
@@ -1098,39 +1251,39 @@ class _ChatScreenState extends State<ChatScreen> {
           filled: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         ),
-        onChanged: _onSearchChanged,
+        onChanged: onSearchChanged,
       ),
       actions: [
-        if (_isSearching) ...[
-          Center(
-            child: Consumer<ChatSearchNotifier>(
-              builder: (context, search, _) => Text(
-                search.counterText,
-                style: const TextStyle(fontSize: 14),
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.arrow_upward),
-            onPressed: _prevSearchMatch,
-          ),
-          IconButton(
-            icon: const Icon(Icons.arrow_downward),
-            onPressed: _nextSearchMatch,
-          ),
-        ],
+        Consumer<ChatSearchNotifier>(
+          builder: (context, search, _) {
+            return Text(
+              search.hasMatches
+                  ? '${search.currentMatchIndex + 1}/${search.matches.length}'
+                  : '0/0',
+              style: const TextStyle(fontSize: 14),
+            );
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.arrow_upward),
+          onPressed: prevSearchMatch,
+        ),
+        IconButton(
+          icon: const Icon(Icons.arrow_downward),
+          onPressed: nextSearchMatch,
+        ),
       ],
     );
   }
 
-  Future<void> _forkChat(ChatProvider chatProvider, String messageId) async {
+  Future<void> forkChat(ChatProvider chatProvider, String messageId) async {
     final newChatId = await chatProvider.forkChat(messageId);
     if (newChatId != null && mounted) {
-      _showTopSnackBar(context, 'Chat forked');
+      showTopSnackBar(context, 'Chat forked');
     }
   }
 
-  Widget _buildWelcomeMessage(BuildContext context) {
+  Widget buildWelcomeMessage(BuildContext context) {
     final theme = Theme.of(context);
     return Center(
       child: Padding(
@@ -1279,7 +1432,7 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
             // Inline attachment bar (above keyboard, no dismiss)
-            if (_showAttachmentBar)
+            if (showAttachmentBar)
               Container(
                 height: 48,
                 margin: const EdgeInsets.only(bottom: 8),
@@ -1305,10 +1458,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   builder: (context, chatProvider, _) {
                     return IconButton(
                       icon: Icon(
-                        _showAttachmentBar
+                        showAttachmentBar
                             ? Icons.close
                             : Icons.attach_file,
-                        color: _showAttachmentBar
+                        color: showAttachmentBar
                             ? Theme.of(context).colorScheme.primary
                             : null,
                       ),
@@ -1321,7 +1474,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 Expanded(
                   child: TextField(
-                    controller: _messageController,
+                    controller: messageController,
                     textInputAction: TextInputAction.send,
                     maxLines: 4,
                     minLines: 1,
@@ -1410,12 +1563,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   decoration: InputDecoration(
                     hintText: 'Search chats...',
                     prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: _drawerSearchQuery.isNotEmpty
+                    suffixIcon: drawerSearchQuery.isNotEmpty
                         ? IconButton(
                             icon: const Icon(Icons.clear, size: 18),
                             onPressed: () {
                               _drawerSearchController.clear();
-                              setState(() => _drawerSearchQuery = '');
+                              setState(() => drawerSearchQuery = '');
                             },
                           )
                         : null,
@@ -1428,7 +1581,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     isDense: true,
                   ),
-                  onChanged: (value) => setState(() => _drawerSearchQuery = value),
+                  onChanged: (value) => setState(() => drawerSearchQuery = value),
                 ),
               ),
               // New Chat
@@ -1441,7 +1594,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
               // Drawer content: search results or normal structure
-              if (_drawerSearchQuery.isNotEmpty)
+              if (drawerSearchQuery.isNotEmpty)
                 ..._buildDrawerSearchResults(chatProvider)
               else ...[
                 // Starred messages
@@ -1532,7 +1685,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Build search results list when user types in the drawer search bar.
   List<Widget> _buildDrawerSearchResults(ChatProvider chatProvider) {
-    final query = _drawerSearchQuery.toLowerCase().trim();
+    final query = drawerSearchQuery.toLowerCase().trim();
     if (query.isEmpty) return [];
 
     final matchingChats = chatProvider.chats

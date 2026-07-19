@@ -1,8 +1,12 @@
 /// Represents a single search match within a message.
-class SearchMatch {
+class ChatSearchMatch {
   final String messageId;
   final int start;
   final int end;
 
-  const SearchMatch(this.messageId, this.start, this.end);
+  const ChatSearchMatch({
+    required this.messageId,
+    required this.start,
+    required this.end,
+  });
 }

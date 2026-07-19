@@ -1,9 +1,12 @@
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/rich_content.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/attachment_bubble.dart';
+import 'package:flutter_ai_chat_app_openrouter/widgets/message_action_button.dart';
 
 /// A simple animated streaming dot for the three-dot thinking indicator.
 class _StreamingDot extends StatefulWidget {
@@ -51,8 +54,7 @@ class _StreamingDotState extends State<_StreamingDot>
       builder: (context, child) {
         final theme = Theme.of(context);
         final animValue = _animation.value;
-        final offset =
-            -8.0 * (0.5 - 0.5 * (1.0 - animValue) * (1.0 - animValue));
+        final offset = -8.0 * (0.5 - 0.5 * (1.0 - animValue) * (1.0 - animValue));
         return Transform.translate(
           offset: Offset(0, offset),
           child: Container(
@@ -78,11 +80,10 @@ class MessageBubble extends StatelessWidget {
   final bool showRetry;
   final VoidCallback? onRetry;
   final VoidCallback? onFork;
+  final VoidCallback? onRegenerate;
+  final VoidCallback? onEdit;
   final bool highlight;
   final String? searchQuery;
-  // Raw offsets (into message.content) of the currently-active search match,
-  // set only on the one bubble that contains it — lets RichContent style
-  // that specific occurrence and expose a key to scroll to it precisely.
   final int? activeMatchStart;
   final int? activeMatchEnd;
   final GlobalKey? activeMatchKey;
@@ -97,6 +98,8 @@ class MessageBubble extends StatelessWidget {
     this.showRetry = false,
     this.onRetry,
     this.onFork,
+    this.onRegenerate,
+    this.onEdit,
     this.highlight = false,
     this.searchQuery,
     this.activeMatchStart,
@@ -104,9 +107,44 @@ class MessageBubble extends StatelessWidget {
     this.activeMatchKey,
   });
 
-  /// Compute the max bubble width once instead of calling MediaQuery per frame.
-  static double _maxBubbleWidth(BuildContext context) {
-    return MediaQuery.of(context).size.width * 0.75;
+  /// The text style used for body content — Inter with comfortable line height.
+  static TextStyle _bodyTextStyle(ThemeData theme, {required bool isUser}) {
+    return GoogleFonts.inter(
+      fontSize: 15,
+      height: 1.6,
+      color: isUser
+          ? theme.colorScheme.onPrimary
+          : theme.colorScheme.onSurface,
+    );
+  }
+
+  /// Base markdown style sheet shared by both user and AI messages.
+  static MarkdownStyleSheet _markdownStyle(ThemeData theme, TextStyle body) {
+    final isDark = theme.brightness == Brightness.dark;
+    return MarkdownStyleSheet(
+      p: body,
+      h1: body.copyWith(fontSize: 24, fontWeight: FontWeight.bold, height: 1.8),
+      h2: body.copyWith(fontSize: 20, fontWeight: FontWeight.w600, height: 1.7),
+      h3: body.copyWith(fontSize: 17, fontWeight: FontWeight.w600, height: 1.6),
+      listBullet: body,
+      code: GoogleFonts.firaCode(
+        fontSize: 13,
+        backgroundColor: isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+      ),
+      codeblockDecoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E1E) : const Color(0xFFF6F8FA),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(
+            color: theme.colorScheme.primary.withOpacity(0.5),
+            width: 3,
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -118,6 +156,64 @@ class MessageBubble extends StatelessWidget {
         message.attachmentPath != null && message.inputType != 'text';
     final isStreaming = message.status == 'sending' && isAssistant;
     final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
+    final bodyStyle = _bodyTextStyle(theme, isUser: isUser);
+    final mdStyle = _markdownStyle(theme, bodyStyle);
+
+    // User messages keep the classic right-aligned bubble.
+    // AI messages are clean, left-aligned, with no visible bubble.
+    final contentColumn = Column(
+      crossAxisAlignment:
+          isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width *
+                (isUser ? 0.75 : 0.85),
+          ),
+          child: isUser ? _buildUserContent(theme, hasAttachment, isStreaming, bodyStyle, mdStyle)
+                         : _buildAiContent(theme, isStreaming, bodyStyle, mdStyle),
+        ),
+        // Action buttons — subtle inline style
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            if (onCopy != null)
+              MessageActionButton(
+                icon: Icons.content_copy,
+                label: 'Copy',
+                onPressed: onCopy!,
+              ),
+            if (onFork != null)
+              MessageActionButton(
+                icon: Icons.call_split,
+                label: 'Fork',
+                onPressed: onFork!,
+              ),
+            if (onStar != null)
+              MessageActionButton(
+                icon: isStarred ? Icons.star : Icons.star_border,
+                label: isStarred ? 'Starred' : 'Star',
+                onPressed: onStar!,
+              ),
+            if (onRegenerate != null && isAssistant)
+              MessageActionButton(
+                icon: Icons.refresh,
+                label: 'Try again',
+                onPressed: onRegenerate!,
+              ),
+            if (onEdit != null && isUser)
+              MessageActionButton(
+                icon: Icons.edit_outlined,
+                label: 'Edit & Retry',
+                onPressed: onEdit!,
+              ),
+          ],
+        ),
+      ],
+    );
 
     final bubbleContent = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -138,179 +234,7 @@ class MessageBubble extends StatelessWidget {
             ),
             const SizedBox(width: 8),
           ],
-          Flexible(
-            child: Column(
-              crossAxisAlignment:
-                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                Container(
-                  constraints: BoxConstraints(
-                    maxWidth: _maxBubbleWidth(context),
-                  ),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: isUser
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.only(
-                      topLeft: const Radius.circular(16),
-                      topRight: const Radius.circular(16),
-                      bottomLeft: Radius.circular(isUser ? 16 : 4),
-                      bottomRight: Radius.circular(isUser ? 4 : 16),
-                    ),
-                    border: highlight
-                        ? Border.all(
-                            color: theme.colorScheme.primary,
-                            width: 2,
-                          )
-                        : null,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Reasoning section (collapsible)
-                      if (isAssistant &&
-                          message.reasoning != null &&
-                          message.reasoning!.isNotEmpty)
-                        _ReasoningToggle(reasoning: message.reasoning!),
-                      // Attachment preview (image, PDF, file)
-                      if (hasAttachment)
-                        AttachmentBubble(
-                          attachmentPath: message.attachmentPath!,
-                          inputType: message.inputType,
-                          isUser: isUser,
-                        ),
-                      // Streaming three dots (when content empty and generating)
-                      if (isStreaming && message.content.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 4, bottom: 4),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _StreamingDot(delay: 0.0),
-                              SizedBox(width: 4),
-                              _StreamingDot(delay: 0.2),
-                              SizedBox(width: 4),
-                              _StreamingDot(delay: 0.4),
-                            ],
-                          ),
-                        ),
-                      // Content text — always visible during streaming even if empty
-                      if (isStreaming || message.content.isNotEmpty)
-                        RichContent(
-                          content:
-                              message.content + (isStreaming ? ' ▎' : ''),
-                          textStyle: TextStyle(
-                            color: isUser
-                                ? theme.colorScheme.onPrimary
-                                : theme.colorScheme.onSurface,
-                          ),
-                          mathColor: isUser
-                              ? theme.colorScheme.onPrimary
-                              : theme.colorScheme.primary,
-                          searchQuery: searchQuery,
-                          activeMatchStart: activeMatchStart,
-                          activeMatchEnd: activeMatchEnd,
-                          activeMatchKey: activeMatchKey,
-                        ),
-                      // Failed state
-                      if (showRetry)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.error_outline,
-                                size: 14,
-                                color: theme.colorScheme.error,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Failed to send',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: theme.colorScheme.error,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              if (onRetry != null)
-                                TextButton.icon(
-                                  onPressed: onRetry,
-                                  icon: const Icon(Icons.refresh, size: 14),
-                                  label: const Text('Retry',
-                                      style: TextStyle(fontSize: 11)),
-                                  style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8),
-                                    minimumSize: Size.zero,
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      // Token count
-                      if (showTokenCount &&
-                          isAssistant &&
-                          (message.inputTokens != null ||
-                              message.outputTokens != null))
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            '⬆${message.inputTokens ?? 0} ⬇${message.outputTokens ?? 0} tokens',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: (isUser
-                                      ? theme.colorScheme.onPrimary
-                                      : theme.colorScheme.onSurface)
-                                  .withValues(alpha: 0.6),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                // Action buttons
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (onCopy != null)
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 16),
-                        tooltip: 'Copy message',
-                        onPressed: onCopy,
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    if (onFork != null)
-                      IconButton(
-                        icon: const Icon(Icons.call_split, size: 16),
-                        tooltip: 'Fork chat from this message',
-                        onPressed: onFork,
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    if (onStar != null)
-                      IconButton(
-                        icon: Icon(
-                          isStarred ? Icons.star : Icons.star_border,
-                          size: 16,
-                          color: isStarred ? Colors.amber : null,
-                        ),
-                        onPressed: onStar,
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          Flexible(child: contentColumn),
           if (isUser) ...[
             const SizedBox(width: 8),
             CircleAvatar(
@@ -327,7 +251,6 @@ class MessageBubble extends StatelessWidget {
       ),
     );
 
-    // On desktop, wrap with right-click context menu
     if (isDesktop) {
       return GestureDetector(
         onSecondaryTap: () => _showContextMenu(context),
@@ -338,7 +261,187 @@ class MessageBubble extends StatelessWidget {
     return bubbleContent;
   }
 
-  /// Show a right-click context menu with clipboard and action options.
+  /// Build the user message bubble (classic right-aligned, colored background).
+  Widget _buildUserContent(
+    ThemeData theme,
+    bool hasAttachment,
+    bool isStreaming,
+    TextStyle bodyStyle,
+    MarkdownStyleSheet mdStyle,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(16),
+          topRight: Radius.circular(16),
+          bottomLeft: Radius.circular(16),
+          bottomRight: Radius.circular(4),
+        ),
+        border: highlight
+            ? Border.all(color: theme.colorScheme.primary, width: 2)
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (hasAttachment)
+            AttachmentBubble(
+              attachmentPath: message.attachmentPath!,
+              inputType: message.inputType,
+              isUser: true,
+            ),
+          if (isStreaming && message.content.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _StreamingDot(delay: 0.0),
+                  SizedBox(width: 4),
+                  _StreamingDot(delay: 0.2),
+                  SizedBox(width: 4),
+                  _StreamingDot(delay: 0.4),
+                ],
+              ),
+            ),
+          if (isStreaming || message.content.isNotEmpty)
+            RichContent(
+              content: message.content + (isStreaming ? ' ▎' : ''),
+              textStyle: bodyStyle,
+              markdownStyleSheet: mdStyle,
+              mathColor: theme.colorScheme.onPrimary,
+              searchQuery: searchQuery,
+              activeMatchStart: activeMatchStart,
+              activeMatchEnd: activeMatchEnd,
+              activeMatchKey: activeMatchKey,
+            ),
+          if (showRetry) _buildRetryRow(theme),
+        ],
+      ),
+    );
+  }
+
+  /// Build the AI message content (clean, no visible bubble).
+  Widget _buildAiContent(
+    ThemeData theme,
+    bool isStreaming,
+    TextStyle bodyStyle,
+    MarkdownStyleSheet mdStyle,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Reasoning block (styled container with ExpansionTile)
+        if (message.reasoning != null && message.reasoning!.isNotEmpty)
+          _AiReasoningTile(reasoning: message.reasoning!),
+
+        // Attachment preview (image, PDF, file)
+        if (message.attachmentPath != null && message.inputType != 'text')
+          AttachmentBubble(
+            attachmentPath: message.attachmentPath!,
+            inputType: message.inputType,
+            isUser: false,
+          ),
+
+        // Streaming three dots
+        if (isStreaming && message.content.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 4, bottom: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _StreamingDot(delay: 0.0),
+                SizedBox(width: 4),
+                _StreamingDot(delay: 0.2),
+                SizedBox(width: 4),
+                _StreamingDot(delay: 0.4),
+              ],
+            ),
+          ),
+
+        // Main content
+        if (isStreaming || message.content.isNotEmpty)
+          RichContent(
+            content: message.content + (isStreaming ? ' ▎' : ''),
+            textStyle: bodyStyle,
+            markdownStyleSheet: mdStyle,
+            mathColor: theme.colorScheme.primary,
+            searchQuery: searchQuery,
+            activeMatchStart: activeMatchStart,
+            activeMatchEnd: activeMatchEnd,
+            activeMatchKey: activeMatchKey,
+          ),
+
+        const SizedBox(height: 12),
+
+        // Token counter chip at bottom-right
+        if (showTokenCount &&
+            (message.inputTokens != null || message.outputTokens != null))
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: theme.dividerColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.token_outlined,
+                    size: 12,
+                    color: theme.iconTheme.color?.withOpacity(0.6),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${message.inputTokens ?? 0} ↓ ${message.outputTokens ?? 0} tokens',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      color: theme.iconTheme.color?.withOpacity(0.6),
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Retry row used in user messages on failure.
+  Widget _buildRetryRow(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 14, color: theme.colorScheme.error),
+          const SizedBox(width: 4),
+          Text(
+            'Failed to send',
+            style: TextStyle(fontSize: 11, color: theme.colorScheme.error),
+          ),
+          const SizedBox(width: 8),
+          if (onRetry != null)
+            TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 14),
+              label: const Text('Retry', style: TextStyle(fontSize: 11)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   void _showContextMenu(BuildContext context) {
     final renderBox = context.findRenderObject() as RenderBox;
     final offset = renderBox.localToGlobal(Offset.zero);
@@ -353,11 +456,9 @@ class MessageBubble extends StatelessWidget {
       ),
       items: [
         const PopupMenuItem(value: 'copy_text', child: Text('Copy text')),
-        const PopupMenuItem(
-            value: 'copy_code', child: Text('Copy as code block')),
+        const PopupMenuItem(value: 'copy_code', child: Text('Copy as code block')),
         if (message.attachmentPath != null && message.inputType == 'image')
-          const PopupMenuItem(
-              value: 'copy_image', child: Text('Copy image path')),
+          const PopupMenuItem(value: 'copy_image', child: Text('Copy image path')),
         const PopupMenuDivider(),
         if (onStar != null)
           PopupMenuItem(
@@ -392,8 +493,7 @@ class MessageBubble extends StatelessWidget {
           break;
         case 'copy_image':
           if (message.attachmentPath != null) {
-            Clipboard.setData(
-                ClipboardData(text: message.attachmentPath!));
+            Clipboard.setData(ClipboardData(text: message.attachmentPath!));
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Image path copied')),
@@ -415,66 +515,63 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
-class _ReasoningToggle extends StatefulWidget {
+/// Styled reasoning toggle using ExpansionTile inside a subtle container.
+class _AiReasoningTile extends StatefulWidget {
   final String reasoning;
-  const _ReasoningToggle({required this.reasoning});
+  const _AiReasoningTile({required this.reasoning});
 
   @override
-  State<_ReasoningToggle> createState() => _ReasoningToggleState();
+  State<_AiReasoningTile> createState() => _AiReasoningTileState();
 }
 
-class _ReasoningToggleState extends State<_ReasoningToggle> {
+class _AiReasoningTileState extends State<_AiReasoningTile> {
   bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InkWell(
-          onTap: () => setState(() => _expanded = !_expanded),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                _expanded ? Icons.expand_less : Icons.expand_more,
-                size: 16,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                _expanded ? 'Hide reasoning' : 'Show reasoning',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+        ),
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        title: Text(
+          'Show reasoning',
+          style: GoogleFonts.inter(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: theme.colorScheme.primary,
           ),
         ),
-        if (_expanded)
-          Container(
-            margin: const EdgeInsets.only(top: 4, bottom: 8),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: theme.colorScheme.outlineVariant,
-              ),
-            ),
+        trailing: Icon(
+          _expanded ? Icons.remove : Icons.add,
+          size: 18,
+          color: theme.colorScheme.primary,
+        ),
+        onExpansionChanged: (val) => setState(() => _expanded = val),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Text(
               widget.reasoning,
-              style: TextStyle(
-                fontSize: 12,
-                color: theme.colorScheme.onSurfaceVariant,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                height: 1.5,
+                color: isDark ? Colors.white60 : Colors.black54,
                 fontStyle: FontStyle.italic,
               ),
             ),
           ),
-      ],
+        ],
+      ),
     );
   }
 }

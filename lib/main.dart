@@ -108,54 +108,13 @@ class AppWithTheme extends StatelessWidget {
 /// A wrapper that initializes desktop-specific features.
 /// On desktop platforms this provides keyboard shortcut mapping.
 /// On mobile, it's a simple pass-through.
-class DesktopAdaptiveWrapper extends StatefulWidget {
+class DesktopAdaptiveWrapper extends StatelessWidget {
   final Widget child;
   const DesktopAdaptiveWrapper({super.key, required this.child});
 
   @override
-  State<DesktopAdaptiveWrapper> createState() => _DesktopAdaptiveWrapperState();
-}
-
-class _DesktopAdaptiveWrapperState extends State<DesktopAdaptiveWrapper> {
-  @override
   Widget build(BuildContext context) {
-    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
-      return widget.child;
-    }
-
-    // On desktop: wrap with keyboard shortcut handling
-    return Focus(
-      autofocus: true,
-      child: CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-              () => _dispatch('new_chat'),
-          const SingleActivator(LogicalKeyboardKey.keyN, control: true,
-                  shift: true):
-              () => _dispatch('new_folder'),
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true):
-              () => _dispatch('search'),
-          const SingleActivator(LogicalKeyboardKey.keyE, control: true):
-              () => _dispatch('focus_input'),
-          const SingleActivator(LogicalKeyboardKey.escape):
-              () => _dispatch('escape'),
-          const SingleActivator(LogicalKeyboardKey.keyC, control: true):
-              () => _dispatch('copy_message'),
-        },
-        child: widget.child,
-      ),
-    );
+    // Desktop-specific features are handled by ChatScreen's internal Focus widget
+    return child;
   }
-
-  void _dispatch(String action) {
-    // Communicate with ChatScreen via notification
-    DesktopShortcutNotification(action).dispatch(context);
-  }
-}
-
-/// Notification dispatched by DesktopAdaptiveWrapper when a keyboard shortcut
-/// is triggered. ChatScreen listens for this.
-class DesktopShortcutNotification extends Notification {
-  final String action;
-  const DesktopShortcutNotification(this.action);
 }

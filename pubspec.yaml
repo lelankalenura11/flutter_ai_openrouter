@@ -51,6 +51,7 @@ dependencies:
   window_manager: ^0.5.2
   google_fonts: ^8.2.0
   scroll_to_index: ^3.0.1
+  image: ^4.9.1
 
 dev_dependencies:
   flutter_test:

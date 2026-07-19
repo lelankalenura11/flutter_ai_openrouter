@@ -2,26 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
-/// A widget that renders a message string with LaTeX math and Markdown support.
-///
-/// Detects:
-/// - `$$...$$` for display math (block)
-/// - `$...$` for inline math
-/// - Everything else rendered as Markdown
-///
-/// When [searchQuery] is non-null, matching text is highlighted with a yellow background.
 class RichContent extends StatelessWidget {
   final String content;
   final TextStyle? textStyle;
   final Color? mathColor;
   final TextAlign textAlign;
   final String? searchQuery;
-  // Raw character offsets (into `content`) of the currently-active search
-  // match, if this bubble contains it. Used to style that one occurrence
-  // distinctly from the other matches.
   final int? activeMatchStart;
   final int? activeMatchEnd;
   final GlobalKey? activeMatchKey;
+  /// Optional custom markdown style overrides (merged with defaults).
+  final MarkdownStyleSheet? markdownStyleSheet;
 
   const RichContent({
     super.key,
@@ -33,12 +24,9 @@ class RichContent extends StatelessWidget {
     this.activeMatchStart,
     this.activeMatchEnd,
     this.activeMatchKey,
+    this.markdownStyleSheet,
   });
 
-  /// Returns a list of InlineSpan for text, splitting by [query] and wrapping
-  /// matches with a yellow background highlight. [segmentRawStart] is this
-  /// segment's offset within the original `content` string, so occurrence
-  /// offsets can be compared against [activeMatchStart]/[activeMatchEnd].
   List<InlineSpan> _highlightSpans(
     String text,
     TextStyle style,
@@ -57,14 +45,12 @@ class RichContent extends StatelessWidget {
     while (true) {
       final index = lowerText.indexOf(lowerQuery, start);
       if (index == -1) {
-        // No more matches — add remaining text
         if (start < text.length) {
           spans.add(TextSpan(text: text.substring(start), style: style));
         }
         break;
       }
 
-      // Text before the match
       if (index > start) {
         spans.add(TextSpan(text: text.substring(start, index), style: style));
       }
@@ -72,37 +58,40 @@ class RichContent extends StatelessWidget {
       final matchText = text.substring(index, index + query.length);
       final rawStart = segmentRawStart + index;
       final rawEnd = rawStart + query.length;
+
       final isActive = activeMatchStart != null &&
           activeMatchEnd != null &&
           rawStart == activeMatchStart &&
           rawEnd == activeMatchEnd;
 
       if (isActive) {
-        // Wrapped in a WidgetSpan (instead of a plain TextSpan) purely so we
-        // can attach a GlobalKey to it — that's what lets the chat screen
-        // call Scrollable.ensureVisible() on this exact occurrence, not
-        // just the message bubble as a whole.
-        spans.add(WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: Container(
-            key: activeMatchKey,
-            padding: const EdgeInsets.symmetric(horizontal: 1),
-            decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: 0.6),
-              borderRadius: BorderRadius.circular(2),
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Container(
+              key: activeMatchKey,
+              padding: const EdgeInsets.symmetric(horizontal: 1),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: Text(
+                matchText,
+                style: style.copyWith(fontWeight: FontWeight.w700),
+              ),
             ),
-            child: Text(matchText, style: style.copyWith(fontWeight: FontWeight.w700)),
           ),
-        ));
+        );
       } else {
-        // Other (non-active) occurrences stay yellow, same as before.
-        spans.add(TextSpan(
-          text: matchText,
-          style: style.copyWith(
-            background: Paint()..color = Colors.yellow.withValues(alpha: 0.4),
-            fontWeight: FontWeight.w600,
+        spans.add(
+          TextSpan(
+            text: matchText,
+            style: style.copyWith(
+              background: Paint()..color = Colors.yellow.withValues(alpha: 0.4),
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ));
+        );
       }
 
       start = index + query.length;
@@ -116,18 +105,14 @@ class RichContent extends StatelessWidget {
     final theme = Theme.of(context);
     final style = textStyle ?? DefaultTextStyle.of(context).style;
     final color = mathColor ?? theme.colorScheme.primary;
-
-    // Parse content into segments (text blocks and LaTeX blocks)
     final segments = _parseContent(content);
 
     if (segments.isEmpty) {
       return Text(content, style: style, textAlign: textAlign);
     }
 
-    // If there's only one text segment with no math, render as markdown
     if (segments.length == 1 && segments.first is TextSegment) {
       final text = (segments.first as TextSegment).text;
-      // If searching, show highlighted plain text instead of markdown
       if (searchQuery != null && searchQuery!.isNotEmpty) {
         final segment = segments.first as TextSegment;
         final spans = _highlightSpans(text, style, searchQuery!, segment.rawStart);
@@ -139,20 +124,28 @@ class RichContent extends StatelessWidget {
       return _buildMarkdown(text, style);
     }
 
-    // If no display math, use RichText with inline spans for selectability
     if (!segments.any((s) => s is DisplayMathSegment)) {
-      final inlineChildren = <InlineSpan>[];
+      final children = <Widget>[];
       for (final segment in segments) {
         if (segment is TextSegment) {
           if (searchQuery != null && searchQuery!.isNotEmpty) {
-            inlineChildren.addAll(_highlightSpans(segment.text, style, searchQuery!, segment.rawStart));
+            final spans = _highlightSpans(segment.text, style, searchQuery!, segment.rawStart);
+            children.add(
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: SelectableText.rich(
+                  TextSpan(children: spans),
+                  textAlign: textAlign,
+                ),
+              ),
+            );
           } else {
-            inlineChildren.add(TextSpan(text: segment.text, style: style));
+            children.add(_buildMarkdown(segment.text, style));
           }
         } else if (segment is InlineMathSegment) {
-          inlineChildren.add(
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
+          children.add(
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
               child: _MathScrollable(
                 child: Math.tex(
                   segment.tex,
@@ -165,25 +158,34 @@ class RichContent extends StatelessWidget {
           );
         }
       }
-      return SelectableText.rich(
-        TextSpan(children: inlineChildren),
-        textAlign: textAlign,
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
       );
     }
 
-    // Mixed with display math: use a Column layout
     return _buildMixedLayout(segments, style, color);
   }
 
   Widget _buildMarkdown(String text, TextStyle style) {
+    // If custom markdown style sheet provided, merge it with defaults
     return MarkdownBody(
       data: text,
       selectable: true,
-      styleSheet: MarkdownStyleSheet(
+      styleSheet: markdownStyleSheet ?? MarkdownStyleSheet(
         p: style,
-        h1: style.copyWith(fontSize: (style.fontSize ?? 14.0) * 1.5, fontWeight: FontWeight.bold),
-        h2: style.copyWith(fontSize: (style.fontSize ?? 14.0) * 1.3, fontWeight: FontWeight.bold),
-        h3: style.copyWith(fontSize: (style.fontSize ?? 14.0) * 1.15, fontWeight: FontWeight.bold),
+        h1: style.copyWith(
+          fontSize: (style.fontSize ?? 14.0) * 1.5,
+          fontWeight: FontWeight.bold,
+        ),
+        h2: style.copyWith(
+          fontSize: (style.fontSize ?? 14.0) * 1.3,
+          fontWeight: FontWeight.bold,
+        ),
+        h3: style.copyWith(
+          fontSize: (style.fontSize ?? 14.0) * 1.15,
+          fontWeight: FontWeight.bold,
+        ),
         listBullet: style,
         code: style.copyWith(
           backgroundColor: Colors.grey.withValues(alpha: 0.2),
@@ -245,7 +247,10 @@ class RichContent extends StatelessWidget {
             child: _MathScrollable(
               child: Math.tex(
                 segment.tex,
-                textStyle: style.copyWith(color: mathColor, fontSize: (style.fontSize ?? 14.0) * 1.1),
+                textStyle: style.copyWith(
+                  color: mathColor,
+                  fontSize: (style.fontSize ?? 14.0) * 1.1,
+                ),
                 mathStyle: MathStyle.display,
                 onErrorFallback: (err) => Text(r'$$' + segment.tex + r'$$', style: style),
               ),
@@ -260,22 +265,16 @@ class RichContent extends StatelessWidget {
     );
   }
 
-  /// Parse text into segments, detecting LaTeX math delimiters.
   List<ContentSegment> _parseContent(String text) {
     final segments = <ContentSegment>[];
-    final regex = RegExp(
-      r'\$\$(.+?)\$\$|\$(.+?)\$',
-      dotAll: true,
-    );
+    final regex = RegExp(r'\$\$(.+?)\$\$|\$(.+?)\$', dotAll: true);
 
     int lastEnd = 0;
     for (final match in regex.allMatches(text)) {
-      // Text before this match
       if (match.start > lastEnd) {
         segments.add(TextSegment(text.substring(lastEnd, match.start), lastEnd));
       }
 
-      // Determine which group matched
       final displayMath = match.group(1);
       final inlineMath = match.group(2);
 
@@ -288,7 +287,6 @@ class RichContent extends StatelessWidget {
       lastEnd = match.end;
     }
 
-    // Remaining text after last match
     if (lastEnd < text.length) {
       segments.add(TextSegment(text.substring(lastEnd), lastEnd));
     }
@@ -297,9 +295,6 @@ class RichContent extends StatelessWidget {
   }
 }
 
-/// A lightweight widget that wraps a child in a horizontally-scrollable container.
-/// Scales down oversized content with FittedBox, and clips it to prevent
-/// overflowing the message bubble boundary.
 class _MathScrollable extends StatelessWidget {
   final Widget child;
   const _MathScrollable({required this.child});
@@ -316,26 +311,19 @@ class _MathScrollable extends StatelessWidget {
   }
 }
 
-/// Base class for content segments.
 sealed class ContentSegment {}
 
-/// Plain text (not LaTeX).
 class TextSegment extends ContentSegment {
   final String text;
-  /// This segment's starting offset within the original `content` string —
-  /// used to map a search match's raw start/end back to the right segment
-  /// and occurrence.
   final int rawStart;
   TextSegment(this.text, this.rawStart);
 }
 
-/// Inline LaTeX math: `$...$`
 class InlineMathSegment extends ContentSegment {
   final String tex;
   InlineMathSegment(this.tex);
 }
 
-/// Display LaTeX math: `$$...$$`
 class DisplayMathSegment extends ContentSegment {
   final String tex;
   DisplayMathSegment(this.tex);
