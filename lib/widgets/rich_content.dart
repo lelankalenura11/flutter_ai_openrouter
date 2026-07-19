@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_ai_chat_app_openrouter/widgets/code_block_widget.dart';
 
 class RichContent extends StatelessWidget {
   final String content;
@@ -172,6 +173,9 @@ class RichContent extends StatelessWidget {
     return MarkdownBody(
       data: text,
       selectable: true,
+      builders: {
+        'code': CodeElementBuilder(),
+      },
       styleSheet: markdownStyleSheet ?? MarkdownStyleSheet(
         p: style,
         h1: style.copyWith(
@@ -191,10 +195,6 @@ class RichContent extends StatelessWidget {
           backgroundColor: Colors.grey.withValues(alpha: 0.2),
           fontFamily: 'monospace',
           fontSize: (style.fontSize ?? 14.0) * 0.9,
-        ),
-        codeblockDecoration: BoxDecoration(
-          color: Colors.grey.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(4),
         ),
         blockquoteDecoration: BoxDecoration(
           border: Border(

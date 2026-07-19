@@ -108,38 +108,46 @@ class MessageBubble extends StatelessWidget {
   });
 
   /// The text style used for body content — Inter with comfortable line height.
+  /// On Android, use system font to avoid the Google Fonts network download.
   static TextStyle _bodyTextStyle(ThemeData theme, {required bool isUser}) {
-    return GoogleFonts.inter(
+    final isAndroid = Platform.isAndroid;
+    return (isAndroid ? TextStyle(
       fontSize: 15,
       height: 1.6,
       color: isUser
           ? theme.colorScheme.onPrimary
           : theme.colorScheme.onSurface,
-    );
+    ) : GoogleFonts.inter(
+      fontSize: 15,
+      height: 1.6,
+      color: isUser
+          ? theme.colorScheme.onPrimary
+          : theme.colorScheme.onSurface,
+    ));
   }
 
   /// Base markdown style sheet shared by both user and AI messages.
   static MarkdownStyleSheet _markdownStyle(ThemeData theme, TextStyle body) {
     final isDark = theme.brightness == Brightness.dark;
+    final isAndroid = Platform.isAndroid;
     return MarkdownStyleSheet(
       p: body,
       h1: body.copyWith(fontSize: 24, fontWeight: FontWeight.bold, height: 1.8),
       h2: body.copyWith(fontSize: 20, fontWeight: FontWeight.w600, height: 1.7),
       h3: body.copyWith(fontSize: 17, fontWeight: FontWeight.w600, height: 1.6),
       listBullet: body,
-      code: GoogleFonts.firaCode(
+      code: isAndroid ? TextStyle(
         fontSize: 13,
-        backgroundColor: isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
-      ),
-      codeblockDecoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E1E1E) : const Color(0xFFF6F8FA),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: theme.dividerColor),
+        backgroundColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+        fontFamily: 'monospace',
+      ) : GoogleFonts.firaCode(
+        fontSize: 13,
+        backgroundColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
       ),
       blockquoteDecoration: BoxDecoration(
         border: Border(
           left: BorderSide(
-            color: theme.colorScheme.primary.withOpacity(0.5),
+            color: theme.colorScheme.primary.withValues(alpha: 0.5),
             width: 3,
           ),
         ),
@@ -184,31 +192,45 @@ class MessageBubble extends StatelessWidget {
               MessageActionButton(
                 icon: Icons.content_copy,
                 label: 'Copy',
+                showLabel: !Platform.isAndroid,
                 onPressed: onCopy!,
               ),
             if (onFork != null)
               MessageActionButton(
                 icon: Icons.call_split,
                 label: 'Fork',
+                showLabel: !Platform.isAndroid,
                 onPressed: onFork!,
               ),
             if (onStar != null)
               MessageActionButton(
                 icon: isStarred ? Icons.star : Icons.star_border,
                 label: isStarred ? 'Starred' : 'Star',
+                showLabel: !Platform.isAndroid,
                 onPressed: onStar!,
               ),
             if (onRegenerate != null && isAssistant)
               MessageActionButton(
                 icon: Icons.refresh,
                 label: 'Try again',
+                showLabel: !Platform.isAndroid,
                 onPressed: onRegenerate!,
               ),
             if (onEdit != null && isUser)
               MessageActionButton(
                 icon: Icons.edit_outlined,
                 label: 'Edit & Retry',
+                showLabel: !Platform.isAndroid,
                 onPressed: onEdit!,
+              ),
+            // Token counter — inline in action row (Android only)
+            if (Platform.isAndroid && showTokenCount &&
+                (message.inputTokens != null || message.outputTokens != null))
+              MessageActionButton(
+                icon: Icons.token_outlined,
+                label: '${message.inputTokens ?? 0}↓${message.outputTokens ?? 0}',
+                showLabel: true,
+                onPressed: () {},
               ),
           ],
         ),
@@ -376,15 +398,16 @@ class MessageBubble extends StatelessWidget {
 
         const SizedBox(height: 12),
 
-        // Token counter chip at bottom-right
-        if (showTokenCount &&
+        // Token counter chip at bottom-right (desktop only; Android shows inline)
+        if (!Platform.isAndroid &&
+            showTokenCount &&
             (message.inputTokens != null || message.outputTokens != null))
           Align(
             alignment: Alignment.centerRight,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: theme.dividerColor.withOpacity(0.1),
+                color: theme.dividerColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
@@ -393,14 +416,14 @@ class MessageBubble extends StatelessWidget {
                   Icon(
                     Icons.token_outlined,
                     size: 12,
-                    color: theme.iconTheme.color?.withOpacity(0.6),
+                    color: theme.iconTheme.color?.withValues(alpha: 0.6),
                   ),
                   const SizedBox(width: 4),
                   Text(
                     '${message.inputTokens ?? 0} ↓ ${message.outputTokens ?? 0} tokens',
-                    style: GoogleFonts.inter(
+                    style: TextStyle(
                       fontSize: 11,
-                      color: theme.iconTheme.color?.withOpacity(0.6),
+                      color: theme.iconTheme.color?.withValues(alpha: 0.6),
                       fontWeight: FontWeight.w400,
                     ),
                   ),
@@ -535,42 +558,54 @@ class _AiReasoningTileState extends State<_AiReasoningTile> {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+        color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isDark ? Colors.white12 : Colors.black12,
         ),
       ),
-      child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+      child: Material(
+        type: MaterialType.transparency,
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
         title: Text(
           'Show reasoning',
-          style: GoogleFonts.inter(
+          style: Platform.isAndroid ? TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: theme.colorScheme.primary,
+          ) : GoogleFonts.inter(
             fontSize: 13,
             fontWeight: FontWeight.w500,
             color: theme.colorScheme.primary,
           ),
         ),
-        trailing: Icon(
-          _expanded ? Icons.remove : Icons.add,
-          size: 18,
-          color: theme.colorScheme.primary,
-        ),
-        onExpansionChanged: (val) => setState(() => _expanded = val),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Text(
-              widget.reasoning,
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                height: 1.5,
-                color: isDark ? Colors.white60 : Colors.black54,
-                fontStyle: FontStyle.italic,
+          trailing: Icon(
+            _expanded ? Icons.remove : Icons.add,
+            size: 18,
+            color: theme.colorScheme.primary,
+          ),
+          onExpansionChanged: (val) => setState(() => _expanded = val),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                widget.reasoning,
+                style: Platform.isAndroid ? TextStyle(
+                  fontSize: 13,
+                  height: 1.5,
+                  color: isDark ? Colors.white60 : Colors.black54,
+                  fontStyle: FontStyle.italic,
+                ) : GoogleFonts.inter(
+                  fontSize: 13,
+                  height: 1.5,
+                  color: isDark ? Colors.white60 : Colors.black54,
+                  fontStyle: FontStyle.italic,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

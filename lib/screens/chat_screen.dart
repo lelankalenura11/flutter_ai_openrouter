@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
+import 'package:flutter_ai_chat_app_openrouter/services/web_search_service.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
 import 'package:flutter_ai_chat_app_openrouter/screens/settings_screen.dart';
@@ -73,6 +74,49 @@ class ChatScreenState extends State<ChatScreen> {
   // Drawer search
   final _drawerSearchController = TextEditingController();
 
+  // Web search
+  bool _isWebSearchEnabled = false;
+  bool _isSearchingWeb = false;
+
+  // @ Mention overlay
+  bool _showMentionOverlay = false;
+  List<FileAttachment> _filteredAttachments = [];
+  final List<_MessageAttachmentRef> _chatAttachments = [];
+
+  /// Populate _chatAttachments from the current chat's messages.
+  /// Extracts the original file name from the clip emoji prefix in the content field.
+  void _refreshChatAttachments() {
+    final provider = context.read<ChatProvider>();
+    final msgs = provider.messages;
+    _chatAttachments.clear();
+    for (final msg in msgs) {
+      if (msg.attachmentPath != null && msg.attachmentPath!.isNotEmpty) {
+        try {
+          final file = File(msg.attachmentPath!);
+          if (file.existsSync()) {
+            String originalName = msg.attachmentPath!.split('/').last;
+            if (msg.content.startsWith('\u{1F4CE}')) {
+              final newlineIndex = msg.content.indexOf('\n');
+              if (newlineIndex > 2) {
+                originalName = msg.content.substring(2, newlineIndex).trim();
+              }
+            }
+            _chatAttachments.add(_MessageAttachmentRef(
+              path: msg.attachmentPath!,
+              originalName: originalName,
+              inputType: msg.inputType,
+              sizeBytes: file.lengthSync(),
+            ));
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  // Pending edit state: tracks user edits so regeneration uses the edited text, not the DB original
+  String? _pendingEditMessageId;
+  String? _pendingEditText;
+
   @override
   void initState() {
     super.initState();
@@ -80,10 +124,22 @@ class ChatScreenState extends State<ChatScreen> {
       context.read<ChatProvider>().loadChats();
     });
     scrollController.addListener(onScroll);
+    messageController.addListener(_handleMentionDetection);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.read<ChatProvider>().addListener(_onChatChanged);
   }
 
   @override
   void dispose() {
+    messageController.removeListener(_handleMentionDetection);
+    // Provider is still available during dispose for StatefulWidget
+    try {
+      context.read<ChatProvider>().removeListener(_onChatChanged);
+    } catch (_) {}
     messageController.dispose();
     scrollController.removeListener(onScroll);
     scrollController.dispose();
@@ -228,7 +284,21 @@ class ChatScreenState extends State<ChatScreen> {
     final chatProvider = context.read<ChatProvider>();
     messageController.clear();
 
-    await chatProvider.sendMessage(text);
+    // Web search: if enabled, fetch search results and pass as system context
+    // (hidden from the user's message bubble, but visible to the AI)
+    if (_isWebSearchEnabled) {
+      setState(() => _isSearchingWeb = true);
+      final searchContext = await WebSearchService.searchAndFormat(text);
+      if (mounted) setState(() => _isSearchingWeb = false);
+      if (searchContext.isNotEmpty) {
+        await chatProvider.sendMessage(text, systemContext: searchContext);
+      } else {
+        await chatProvider.sendMessage(text);
+      }
+    } else {
+      await chatProvider.sendMessage(text);
+    }
+
     if (mounted) {
       setState(() => showAttachmentBar = false);
     }
@@ -785,13 +855,13 @@ class ChatScreenState extends State<ChatScreen> {
                               },
                             ),
                           ),
-                          // Error banner
-                          Consumer<ChatProvider>(
-                            builder: (context, chatProvider, _) {
-                              if (chatProvider.error == null) {
-                                return const SizedBox.shrink();
-                              }
-                              return Container(
+                          // Error banner — only rebuilds when error changes
+                          Selector<ChatProvider, String?>(
+                            selector: (_, p) => p.error,
+                            builder: (context, error, _) {
+                            if (error == null) return const SizedBox.shrink();
+                            final chatProvider = context.read<ChatProvider>();
+                               return Container(
                                 width: double.infinity,
                                 padding: const EdgeInsets.all(8),
                                 color: theme.colorScheme.errorContainer,
@@ -802,7 +872,7 @@ class ChatScreenState extends State<ChatScreen> {
                                     const SizedBox(width: 8),
                                     Expanded(
                                       child: Text(
-                                        chatProvider.error!,
+                                      error,
                                         style: TextStyle(
                                           fontSize: 12,
                                           color: theme.colorScheme.onErrorContainer,
@@ -843,6 +913,11 @@ class ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
+  }
+
+  /// Refresh chat attachments when messages change.
+  void _onChatChanged() {
+    _refreshChatAttachments();
   }
 
   /// Handle files dropped from the OS onto the chat area.
@@ -972,6 +1047,7 @@ class ChatScreenState extends State<ChatScreen> {
   }
 
   /// Handle "Try again" on an AI message — finds the preceding user message and re-sends it.
+  /// Uses edited text from the controller if the user edited the message first.
   Future<void> _handleRegenerate(ChatProvider chatProvider, String assistantMsgId) async {
     final messages = chatProvider.messages;
     final idx = messages.indexWhere((m) => m.id == assistantMsgId);
@@ -980,8 +1056,27 @@ class ChatScreenState extends State<ChatScreen> {
     // Find the preceding user message
     for (int i = idx - 1; i >= 0; i--) {
       if (messages[i].role == 'user') {
-        await chatProvider.retryMessage(messages[i].id);
+        // Check if there's a pending edit for this message
+        if (messages[i].id == _pendingEditMessageId && _pendingEditText != null) {
+          // Use the edited text and clear the pending state
+          await chatProvider.sendMessage(_pendingEditText!, messageIdToReplace: messages[i].id);
+          _pendingEditMessageId = null;
+          _pendingEditText = null;
+        } else {
+          await chatProvider.retryMessage(messages[i].id);
+        }
         return;
+      }
+    }
+  }
+
+  /// Tracks the text the user typed in the message controller after "Edit & Retry",
+  /// so that regenerate uses the updated text rather than the DB original.
+  void _updatePendingEditText() {
+    if (_pendingEditMessageId != null) {
+      final text = messageController.text.trim();
+      if (text.isNotEmpty) {
+        _pendingEditText = text;
       }
     }
   }
@@ -989,6 +1084,8 @@ class ChatScreenState extends State<ChatScreen> {
   /// Handle "Edit & Retry" on a user message — copies text and attachment to input without deleting anything.
   Future<void> _handleEditMessage(ChatProvider chatProvider, MessagesTableData msg) async {
     messageController.text = msg.content;
+    _pendingEditMessageId = msg.id;
+    _pendingEditText = msg.content;
     messageController.selection = TextSelection.fromPosition(
       TextPosition(offset: msg.content.length),
     );
@@ -1013,8 +1110,21 @@ class ChatScreenState extends State<ChatScreen> {
 
   /// Build the persistent sidebar content (desktop-adaptive version of drawer).
   Widget _buildSidebarContent() {
-    return Consumer<ChatProvider>(
-      builder: (context, chatProvider, _) {
+    return Selector<ChatProvider, List<ChatsTableData>>(
+      selector: (_, provider) => provider.chats,
+      shouldRebuild: (prev, next) {
+        if (prev.length != next.length) return true;
+        for (int i = 0; i < prev.length; i++) {
+          if (prev[i].id != next[i].id ||
+              prev[i].title != next[i].title ||
+              prev[i].isPinned != next[i].isPinned) {
+            return true;
+          }
+        }
+        return false;
+      },
+      builder: (context, chats, _) {
+        final chatProvider = context.read<ChatProvider>();
         return Column(
           children: [
             // Header
@@ -1102,45 +1212,51 @@ class ChatScreenState extends State<ChatScreen> {
                     onTap: () => _showStarredMessages(context),
                   ),
                   // Folders section
-                  ExpansionTile(
-                    leading: const Icon(Icons.folder),
-                    title: Text('Folders${chatProvider.folders.isNotEmpty ? ' (${chatProvider.folders.length})' : ''}'),
-                    initiallyExpanded: false,
-                    children: [
-                      ...chatProvider.folders.map((folder) {
-                        final folderChatCount = chatProvider.getChatsByFolder(folder.id).length;
-                        return ExpansionTile(
-                          leading: const Icon(Icons.folder_open, size: 20),
-                          title: Text('${folder.name} ($folderChatCount)'),
+                  Material(
+                    type: MaterialType.transparency,
+                    child: ExpansionTile(
+                      leading: const Icon(Icons.folder),
+                      title: Text('Folders${chatProvider.folders.isNotEmpty ? ' (${chatProvider.folders.length})' : ''}'),
+                      initiallyExpanded: false,
+                      children: [
+                        ...chatProvider.folders.map((folder) {
+                          final folderChatCount = chatProvider.getChatsByFolder(folder.id).length;
+                          return Material(
+                            type: MaterialType.transparency,
+                            child: ExpansionTile(
+                              leading: const Icon(Icons.folder_open, size: 20),
+                              title: Text('${folder.name} ($folderChatCount)'),
+                              dense: true,
+                              trailing: PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert, size: 18),
+                                onSelected: (value) {
+                                  if (value == 'rename') {
+                                    _showRenameFolderDialog(context, folder.id, folder.name);
+                                  } else if (value == 'delete') {
+                                    chatProvider.deleteFolder(folder.id);
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                ],
+                              ),
+                              initiallyExpanded: false,
+                              children: chatProvider
+                                  .getChatsByFolder(folder.id)
+                                  .map((chat) => _buildChatTile(chatProvider, chat, isInSidebar: true))
+                                  .toList(),
+                            ),
+                          );
+                        }),
+                        ListTile(
+                          leading: const Icon(Icons.create_new_folder_outlined),
+                          title: const Text('New Folder'),
                           dense: true,
-                          trailing: PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert, size: 18),
-                            onSelected: (value) {
-                              if (value == 'rename') {
-                                _showRenameFolderDialog(context, folder.id, folder.name);
-                              } else if (value == 'delete') {
-                                chatProvider.deleteFolder(folder.id);
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                              const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                            ],
-                          ),
-                          initiallyExpanded: false,
-                          children: chatProvider
-                              .getChatsByFolder(folder.id)
-                              .map((chat) => _buildChatTile(chatProvider, chat, isInSidebar: true))
-                              .toList(),
-                        );
-                      }),
-                      ListTile(
-                        leading: const Icon(Icons.create_new_folder_outlined),
-                        title: const Text('New Folder'),
-                        dense: true,
-                        onTap: () => _showCreateFolderDialog(context),
-                      ),
-                    ],
+                          onTap: () => _showCreateFolderDialog(context),
+                        ),
+                      ],
+                    ),
                   ),
                   // Unfiled chats
                   if (chatProvider.getChatsByFolder(null).isNotEmpty) ...[
@@ -1286,8 +1402,8 @@ class ChatScreenState extends State<ChatScreen> {
   Widget buildWelcomeMessage(BuildContext context) {
     final theme = Theme.of(context);
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -1450,8 +1566,80 @@ class ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
-            // Text input + buttons
+            // Web searching indicator
+            if (_isSearchingWeb)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Row(
+                  children: [
+                    SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(width: 8),
+                    Text('Searching the web...',
+                      style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                    ),
+                  ],
+                ),
+              ),
+            // PDF preparing indicator
+            Consumer<ChatProvider>(
+              builder: (context, chatProvider, _) {
+                if (!chatProvider.isPreparingPdf) return const SizedBox.shrink();
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: Row(
+                    children: [
+                      SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(width: 8),
+                      Text('Preparing PDF...',
+                        style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            // @ Mention overlay
+            if (_showMentionOverlay && _filteredAttachments.isNotEmpty)
+              Container(
+                constraints: const BoxConstraints(maxHeight: 180),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.dividerColor),
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8)],
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _filteredAttachments.length,
+                  itemBuilder: (context, index) {
+                    final att = _filteredAttachments[index];
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(
+                        att.isImage ? Icons.image : att.isPdf ? Icons.picture_as_pdf : Icons.insert_drive_file,
+                        size: 18,
+                        color: theme.colorScheme.primary,
+                      ),
+                      title: Text(att.originalName, style: const TextStyle(fontSize: 13)),
+                      onTap: () {
+                        context.read<ChatProvider>().setPendingAttachment(att);
+                        final text = messageController.text;
+                        final atIndex = text.lastIndexOf('@');
+                        if (atIndex != -1) {
+                          messageController.text = text.substring(0, atIndex);
+                          messageController.selection = TextSelection.fromPosition(
+                            TextPosition(offset: messageController.text.length),
+                          );
+                        }
+                        setState(() => _showMentionOverlay = false);
+                      },
+                    );
+                  },
+                ),
+              ),
+            // Text input + buttons — icons beside text, expands up to 2 lines
             Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 // Attachment button — toggles inline bar above keyboard
                 Consumer<ChatProvider>(
@@ -1476,10 +1664,10 @@ class ChatScreenState extends State<ChatScreen> {
                   child: TextField(
                     controller: messageController,
                     textInputAction: TextInputAction.send,
-                    maxLines: 4,
+                    maxLines: 2,
                     minLines: 1,
                     decoration: InputDecoration(
-                      hintText: 'Type a message...',
+                      hintText: 'Message',
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none,
@@ -1491,10 +1679,36 @@ class ChatScreenState extends State<ChatScreen> {
                         vertical: 10,
                       ),
                     ),
+                    onChanged: (_) => _updatePendingEditText(),
                     onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
-                const SizedBox(width: 8),
+                // Web search toggle button — more visible when enabled
+                Consumer<ChatProvider>(
+                  builder: (context, chatProvider, _) {
+                    return Container(
+                      decoration: _isWebSearchEnabled
+                          ? BoxDecoration(
+                              color: Theme.of(context).colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(12),
+                            )
+                          : null,
+                      child: IconButton(
+                        icon: Icon(
+                          _isWebSearchEnabled ? Icons.language : Icons.language_outlined,
+                          color: _isWebSearchEnabled
+                              ? Theme.of(context).colorScheme.primary
+                              : null,
+                        ),
+                        tooltip: _isWebSearchEnabled ? 'Web Search (on)' : 'Web Search',
+                        onPressed: chatProvider.isSending
+                            ? null
+                            : () => setState(() => _isWebSearchEnabled = !_isWebSearchEnabled),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 4),
                 Consumer<ChatProvider>(
                   builder: (context, chatProvider, _) {
                     // Show stop button when sending in THIS chat, send button otherwise
@@ -1525,8 +1739,21 @@ class ChatScreenState extends State<ChatScreen> {
 
   Widget _buildChatListDrawer(BuildContext context) {
     return Drawer(
-      child: Consumer<ChatProvider>(
-        builder: (context, chatProvider, _) {
+      child: Selector<ChatProvider, List<ChatsTableData>>(
+        selector: (_, provider) => provider.chats,
+        shouldRebuild: (prev, next) {
+          if (prev.length != next.length) return true;
+          for (int i = 0; i < prev.length; i++) {
+            if (prev[i].id != next[i].id ||
+                prev[i].title != next[i].title ||
+                prev[i].isPinned != next[i].isPinned) {
+              return true;
+            }
+          }
+          return false;
+        },
+        builder: (context, chats, _) {
+          final chatProvider = context.read<ChatProvider>();
           return ListView(
             padding: EdgeInsets.zero,
             children: [
@@ -1616,47 +1843,56 @@ class ChatScreenState extends State<ChatScreen> {
                   },
                 ),
                 // Folders section (collapsible parent)
-                ExpansionTile(
-                  leading: const Icon(Icons.folder),
-                  title: Text('Folders${chatProvider.folders.isNotEmpty ? ' (${chatProvider.folders.length})' : ''}'),
-                  initiallyExpanded: false,
-                  children: [
-                    // Individual folders
-                    ...chatProvider.folders.map((folder) {
-                      final folderChatCount = chatProvider.getChatsByFolder(folder.id).length;
-                      return ExpansionTile(
-                          leading: const Icon(Icons.folder_open, size: 20),
-                          title: Text('${folder.name} ($folderChatCount)'),
-                          trailing: PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert, size: 18),
-                            onSelected: (value) {
-                              if (value == 'rename') {
-                                _showRenameFolderDialog(context, folder.id, folder.name);
-                              } else if (value == 'delete') {
-                                chatProvider.deleteFolder(folder.id);
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                              const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                            ],
-                          ),
-                          initiallyExpanded: false,
+                Material(
+                  type: MaterialType.transparency,
+                  child: ExpansionTile(
+                    leading: const Icon(Icons.folder),
+                    title: Text('Folders${chatProvider.folders.isNotEmpty ? ' (${chatProvider.folders.length})' : ''}'),
+                    initiallyExpanded: false,
+                    children: [
+                      // Individual folders
+                      ...chatProvider.folders.map((folder) {
+                        final folderChatCount = chatProvider.getChatsByFolder(folder.id).length;
+                        return Material(
+                          type: MaterialType.transparency,
+                          child: ExpansionTile(
+                              leading: const Icon(Icons.folder_open, size: 20),
+                              title: Text('${folder.name} ($folderChatCount)'),
+                              trailing: PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert, size: 18),
+                                onSelected: (value) {
+                                  if (value == 'rename') {
+                                    _showRenameFolderDialog(context, folder.id, folder.name);
+                                  } else if (value == 'delete') {
+                                    chatProvider.deleteFolder(folder.id);
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                ],
+                              ),
+                              initiallyExpanded: false,
                           children: chatProvider
                               .getChatsByFolder(folder.id)
-                              .map((chat) => _buildChatTile(chatProvider, chat))
+                              .map((chat) => Material(
+                                type: MaterialType.transparency,
+                                child: _buildChatTile(chatProvider, chat),
+                              ))
                               .toList(),
+                            ),
                         );
-                    }),
-                    // New Folder button inside collapsible section
-                    ListTile(
-                      leading: const Icon(Icons.create_new_folder_outlined),
-                      title: const Text('New Folder'),
-                      onTap: () {
-                        _showCreateFolderDialog(context);
-                      },
-                    ),
-                  ],
+                      }),
+                      // New Folder button inside collapsible section
+                      ListTile(
+                        leading: const Icon(Icons.create_new_folder_outlined),
+                        title: const Text('New Folder'),
+                        onTap: () {
+                          _showCreateFolderDialog(context);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
                 // Root folder (no folder) — only show if there are unfiled chats
                 if (chatProvider.getChatsByFolder(null).isNotEmpty) ...[
@@ -1724,6 +1960,7 @@ class ChatScreenState extends State<ChatScreen> {
 
   Widget _buildChatTile(ChatProvider chatProvider, ChatsTableData chat, {bool isInSidebar = false}) {
     final isGenerating = chatProvider.isChatGenerating(chat.id);
+    final theme = Theme.of(context);
     return ListTile(
       dense: true,
       leading: isGenerating
@@ -1732,7 +1969,11 @@ class ChatScreenState extends State<ChatScreen> {
               height: 18,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          : const Icon(Icons.chat_bubble_outline, size: 18),
+          : Icon(
+              chat.isPinned ? Icons.push_pin : Icons.chat_bubble_outline,
+              size: 18,
+              color: chat.isPinned ? theme.colorScheme.primary : null,
+            ),
       title: Text(
         chat.title,
         maxLines: 1,
@@ -1740,29 +1981,47 @@ class ChatScreenState extends State<ChatScreen> {
         style: TextStyle(
           fontSize: 14,
           color: isGenerating
-              ? Theme.of(context).colorScheme.primary
+              ? theme.colorScheme.primary
               : null,
         ),
       ),
       selected: chat.id == chatProvider.currentChatId,
-      trailing: PopupMenuButton<String>(
-        icon: const Icon(Icons.more_vert, size: 16),
-        onSelected: (value) {
-          if (value == 'rename') {
-            _showRenameChatDialog(context, chat.id, chat.title);
-          } else if (value == 'move') {
-            _showMoveChatDialog(context, chat.id, chat.folderId);
-          } else if (value == 'delete') {
-            if (chat.id == chatProvider.currentChatId && !isInSidebar) {
-              Navigator.pop(context);
-            }
-            chatProvider.deleteChat(chat.id);
-          }
-        },
-        itemBuilder: (context) => [
-          const PopupMenuItem(value: 'rename', child: Text('Rename')),
-          const PopupMenuItem(value: 'move', child: Text('Move to folder')),
-          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Pin/unpin button
+          IconButton(
+            icon: Icon(
+              chat.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+              size: 16,
+              color: chat.isPinned ? theme.colorScheme.primary : Colors.grey,
+            ),
+            onPressed: () => chatProvider.togglePinChat(chat.id),
+            tooltip: chat.isPinned ? 'Unpin' : 'Pin',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, size: 16),
+            onSelected: (value) {
+              if (value == 'rename') {
+                _showRenameChatDialog(context, chat.id, chat.title);
+              } else if (value == 'move') {
+                _showMoveChatDialog(context, chat.id, chat.folderId);
+              } else if (value == 'delete') {
+                if (chat.id == chatProvider.currentChatId && !isInSidebar) {
+                  Navigator.pop(context);
+                }
+                chatProvider.deleteChat(chat.id);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'rename', child: Text('Rename')),
+              const PopupMenuItem(value: 'move', child: Text('Move to folder')),
+              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+          ),
         ],
       ),
       onTap: () {
@@ -2081,4 +2340,81 @@ class ChatScreenState extends State<ChatScreen> {
       builder: (_) => const SkillsSheet(),
     );
   }
+
+  /// Detects `@` mentions and shows/hides the attachment overlay.
+  void _handleMentionDetection() {
+    if (!mounted) return;
+    final text = messageController.text;
+
+    // 1. Find the LAST '@' character typed
+    final atIndex = text.lastIndexOf('@');
+
+    // If no '@' exists, hide the overlay
+    if (atIndex == -1) {
+      if (_showMentionOverlay && mounted) setState(() => _showMentionOverlay = false);
+      return;
+    }
+
+    // 2. Check what is immediately BEFORE the '@'
+    final isAtStart = atIndex == 0;
+    final hasSpaceBefore = atIndex > 0 && text[atIndex - 1] == ' ';
+
+    // If it's an email (e.g., "x@gmail.com"), the character before '@' is not a space.
+    if (!isAtStart && !hasSpaceBefore) {
+      if (_showMentionOverlay && mounted) setState(() => _showMentionOverlay = false);
+      return;
+    }
+
+    // 3. Extract the query after '@' (until next space)
+    String query = '';
+    if (text.length > atIndex + 1) {
+      final afterAt = text.substring(atIndex + 1);
+      final spaceIndex = afterAt.indexOf(' ');
+      query = spaceIndex == -1 ? afterAt : afterAt.substring(0, spaceIndex);
+    }
+
+    // 4. If user typed a space right after '@', hide
+    if (query.isEmpty && text.length > atIndex + 1 && text[atIndex + 1] == ' ') {
+      if (_showMentionOverlay && mounted) setState(() => _showMentionOverlay = false);
+      return;
+    }
+
+    // 5. Valid mention — filter attachments
+    if (!mounted) return;
+    setState(() {
+      _showMentionOverlay = true;
+      _filteredAttachments = _chatAttachments
+          .where((a) => a.originalName.toLowerCase().contains(query.toLowerCase()))
+          .map((ref) => ref.toFileAttachment())
+          .toList();
+    });
+  }
+}
+
+/// Lightweight reference to a file attachment found in chat messages.
+class _MessageAttachmentRef {
+  final String path;
+  final String originalName;
+  final String inputType;
+  final int sizeBytes;
+
+  const _MessageAttachmentRef({
+    required this.path,
+    required this.originalName,
+    required this.inputType,
+    required this.sizeBytes,
+  });
+
+  FileAttachment toFileAttachment() => FileAttachment(
+        path: path,
+        name: originalName,
+        originalName: originalName,
+        mimeType: inputType == 'image'
+            ? 'image/png'
+            : inputType == 'pdf'
+                ? 'application/pdf'
+                : 'application/octet-stream',
+        sizeBytes: sizeBytes,
+        inputType: inputType,
+      );
 }

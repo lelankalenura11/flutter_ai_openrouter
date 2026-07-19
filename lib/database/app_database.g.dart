@@ -369,6 +369,21 @@ class $ChatsTableTable extends ChatsTable
         type: DriftSqlType.string,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _isPinnedMeta = const VerificationMeta(
+    'isPinned',
+  );
+  @override
+  late final GeneratedColumn<bool> isPinned = GeneratedColumn<bool>(
+    'is_pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _totalInputTokensMeta = const VerificationMeta(
     'totalInputTokens',
   );
@@ -420,6 +435,7 @@ class $ChatsTableTable extends ChatsTable
     title,
     skillId,
     forkedFromMessageId,
+    isPinned,
     totalInputTokens,
     totalOutputTokens,
     createdAt,
@@ -469,6 +485,12 @@ class $ChatsTableTable extends ChatsTable
           data['forked_from_message_id']!,
           _forkedFromMessageIdMeta,
         ),
+      );
+    }
+    if (data.containsKey('is_pinned')) {
+      context.handle(
+        _isPinnedMeta,
+        isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta),
       );
     }
     if (data.containsKey('total_input_tokens')) {
@@ -538,6 +560,10 @@ class $ChatsTableTable extends ChatsTable
         DriftSqlType.string,
         data['${effectivePrefix}forked_from_message_id'],
       ),
+      isPinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_pinned'],
+      )!,
       totalInputTokens: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}total_input_tokens'],
@@ -569,6 +595,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
   final String title;
   final String? skillId;
   final String? forkedFromMessageId;
+  final bool isPinned;
   final int totalInputTokens;
   final int totalOutputTokens;
   final DateTime createdAt;
@@ -579,6 +606,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
     required this.title,
     this.skillId,
     this.forkedFromMessageId,
+    required this.isPinned,
     required this.totalInputTokens,
     required this.totalOutputTokens,
     required this.createdAt,
@@ -598,6 +626,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
     if (!nullToAbsent || forkedFromMessageId != null) {
       map['forked_from_message_id'] = Variable<String>(forkedFromMessageId);
     }
+    map['is_pinned'] = Variable<bool>(isPinned);
     map['total_input_tokens'] = Variable<int>(totalInputTokens);
     map['total_output_tokens'] = Variable<int>(totalOutputTokens);
     map['created_at'] = Variable<DateTime>(createdAt);
@@ -618,6 +647,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
       forkedFromMessageId: forkedFromMessageId == null && nullToAbsent
           ? const Value.absent()
           : Value(forkedFromMessageId),
+      isPinned: Value(isPinned),
       totalInputTokens: Value(totalInputTokens),
       totalOutputTokens: Value(totalOutputTokens),
       createdAt: Value(createdAt),
@@ -638,6 +668,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
       forkedFromMessageId: serializer.fromJson<String?>(
         json['forkedFromMessageId'],
       ),
+      isPinned: serializer.fromJson<bool>(json['isPinned']),
       totalInputTokens: serializer.fromJson<int>(json['totalInputTokens']),
       totalOutputTokens: serializer.fromJson<int>(json['totalOutputTokens']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -653,6 +684,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
       'title': serializer.toJson<String>(title),
       'skillId': serializer.toJson<String?>(skillId),
       'forkedFromMessageId': serializer.toJson<String?>(forkedFromMessageId),
+      'isPinned': serializer.toJson<bool>(isPinned),
       'totalInputTokens': serializer.toJson<int>(totalInputTokens),
       'totalOutputTokens': serializer.toJson<int>(totalOutputTokens),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -666,6 +698,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
     String? title,
     Value<String?> skillId = const Value.absent(),
     Value<String?> forkedFromMessageId = const Value.absent(),
+    bool? isPinned,
     int? totalInputTokens,
     int? totalOutputTokens,
     DateTime? createdAt,
@@ -678,6 +711,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
     forkedFromMessageId: forkedFromMessageId.present
         ? forkedFromMessageId.value
         : this.forkedFromMessageId,
+    isPinned: isPinned ?? this.isPinned,
     totalInputTokens: totalInputTokens ?? this.totalInputTokens,
     totalOutputTokens: totalOutputTokens ?? this.totalOutputTokens,
     createdAt: createdAt ?? this.createdAt,
@@ -692,6 +726,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
       forkedFromMessageId: data.forkedFromMessageId.present
           ? data.forkedFromMessageId.value
           : this.forkedFromMessageId,
+      isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       totalInputTokens: data.totalInputTokens.present
           ? data.totalInputTokens.value
           : this.totalInputTokens,
@@ -711,6 +746,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
           ..write('title: $title, ')
           ..write('skillId: $skillId, ')
           ..write('forkedFromMessageId: $forkedFromMessageId, ')
+          ..write('isPinned: $isPinned, ')
           ..write('totalInputTokens: $totalInputTokens, ')
           ..write('totalOutputTokens: $totalOutputTokens, ')
           ..write('createdAt: $createdAt, ')
@@ -726,6 +762,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
     title,
     skillId,
     forkedFromMessageId,
+    isPinned,
     totalInputTokens,
     totalOutputTokens,
     createdAt,
@@ -740,6 +777,7 @@ class ChatsTableData extends DataClass implements Insertable<ChatsTableData> {
           other.title == this.title &&
           other.skillId == this.skillId &&
           other.forkedFromMessageId == this.forkedFromMessageId &&
+          other.isPinned == this.isPinned &&
           other.totalInputTokens == this.totalInputTokens &&
           other.totalOutputTokens == this.totalOutputTokens &&
           other.createdAt == this.createdAt &&
@@ -752,6 +790,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
   final Value<String> title;
   final Value<String?> skillId;
   final Value<String?> forkedFromMessageId;
+  final Value<bool> isPinned;
   final Value<int> totalInputTokens;
   final Value<int> totalOutputTokens;
   final Value<DateTime> createdAt;
@@ -763,6 +802,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
     this.title = const Value.absent(),
     this.skillId = const Value.absent(),
     this.forkedFromMessageId = const Value.absent(),
+    this.isPinned = const Value.absent(),
     this.totalInputTokens = const Value.absent(),
     this.totalOutputTokens = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -775,6 +815,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
     required String title,
     this.skillId = const Value.absent(),
     this.forkedFromMessageId = const Value.absent(),
+    this.isPinned = const Value.absent(),
     required int totalInputTokens,
     required int totalOutputTokens,
     required DateTime createdAt,
@@ -792,6 +833,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
     Expression<String>? title,
     Expression<String>? skillId,
     Expression<String>? forkedFromMessageId,
+    Expression<bool>? isPinned,
     Expression<int>? totalInputTokens,
     Expression<int>? totalOutputTokens,
     Expression<DateTime>? createdAt,
@@ -805,6 +847,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
       if (skillId != null) 'skill_id': skillId,
       if (forkedFromMessageId != null)
         'forked_from_message_id': forkedFromMessageId,
+      if (isPinned != null) 'is_pinned': isPinned,
       if (totalInputTokens != null) 'total_input_tokens': totalInputTokens,
       if (totalOutputTokens != null) 'total_output_tokens': totalOutputTokens,
       if (createdAt != null) 'created_at': createdAt,
@@ -819,6 +862,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
     Value<String>? title,
     Value<String?>? skillId,
     Value<String?>? forkedFromMessageId,
+    Value<bool>? isPinned,
     Value<int>? totalInputTokens,
     Value<int>? totalOutputTokens,
     Value<DateTime>? createdAt,
@@ -831,6 +875,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
       title: title ?? this.title,
       skillId: skillId ?? this.skillId,
       forkedFromMessageId: forkedFromMessageId ?? this.forkedFromMessageId,
+      isPinned: isPinned ?? this.isPinned,
       totalInputTokens: totalInputTokens ?? this.totalInputTokens,
       totalOutputTokens: totalOutputTokens ?? this.totalOutputTokens,
       createdAt: createdAt ?? this.createdAt,
@@ -859,6 +904,9 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
         forkedFromMessageId.value,
       );
     }
+    if (isPinned.present) {
+      map['is_pinned'] = Variable<bool>(isPinned.value);
+    }
     if (totalInputTokens.present) {
       map['total_input_tokens'] = Variable<int>(totalInputTokens.value);
     }
@@ -885,6 +933,7 @@ class ChatsTableCompanion extends UpdateCompanion<ChatsTableData> {
           ..write('title: $title, ')
           ..write('skillId: $skillId, ')
           ..write('forkedFromMessageId: $forkedFromMessageId, ')
+          ..write('isPinned: $isPinned, ')
           ..write('totalInputTokens: $totalInputTokens, ')
           ..write('totalOutputTokens: $totalOutputTokens, ')
           ..write('createdAt: $createdAt, ')
@@ -3163,6 +3212,7 @@ typedef $$ChatsTableTableCreateCompanionBuilder =
       required String title,
       Value<String?> skillId,
       Value<String?> forkedFromMessageId,
+      Value<bool> isPinned,
       required int totalInputTokens,
       required int totalOutputTokens,
       required DateTime createdAt,
@@ -3176,6 +3226,7 @@ typedef $$ChatsTableTableUpdateCompanionBuilder =
       Value<String> title,
       Value<String?> skillId,
       Value<String?> forkedFromMessageId,
+      Value<bool> isPinned,
       Value<int> totalInputTokens,
       Value<int> totalOutputTokens,
       Value<DateTime> createdAt,
@@ -3214,6 +3265,11 @@ class $$ChatsTableTableFilterComposer
 
   ColumnFilters<String> get forkedFromMessageId => $composableBuilder(
     column: $table.forkedFromMessageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3272,6 +3328,11 @@ class $$ChatsTableTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get totalInputTokens => $composableBuilder(
     column: $table.totalInputTokens,
     builder: (column) => ColumnOrderings(column),
@@ -3318,6 +3379,9 @@ class $$ChatsTableTableAnnotationComposer
     column: $table.forkedFromMessageId,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get isPinned =>
+      $composableBuilder(column: $table.isPinned, builder: (column) => column);
 
   GeneratedColumn<int> get totalInputTokens => $composableBuilder(
     column: $table.totalInputTokens,
@@ -3372,6 +3436,7 @@ class $$ChatsTableTableTableManager
                 Value<String> title = const Value.absent(),
                 Value<String?> skillId = const Value.absent(),
                 Value<String?> forkedFromMessageId = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 Value<int> totalInputTokens = const Value.absent(),
                 Value<int> totalOutputTokens = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -3383,6 +3448,7 @@ class $$ChatsTableTableTableManager
                 title: title,
                 skillId: skillId,
                 forkedFromMessageId: forkedFromMessageId,
+                isPinned: isPinned,
                 totalInputTokens: totalInputTokens,
                 totalOutputTokens: totalOutputTokens,
                 createdAt: createdAt,
@@ -3396,6 +3462,7 @@ class $$ChatsTableTableTableManager
                 required String title,
                 Value<String?> skillId = const Value.absent(),
                 Value<String?> forkedFromMessageId = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 required int totalInputTokens,
                 required int totalOutputTokens,
                 required DateTime createdAt,
@@ -3407,6 +3474,7 @@ class $$ChatsTableTableTableManager
                 title: title,
                 skillId: skillId,
                 forkedFromMessageId: forkedFromMessageId,
+                isPinned: isPinned,
                 totalInputTokens: totalInputTokens,
                 totalOutputTokens: totalOutputTokens,
                 createdAt: createdAt,

@@ -6,6 +6,7 @@ class ChatsTable extends Table {
   TextColumn get title => text()();
   TextColumn get skillId => text().nullable()();
   TextColumn get forkedFromMessageId => text().nullable()();
+  BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
   IntColumn get totalInputTokens => integer()();
   IntColumn get totalOutputTokens => integer()();
   DateTimeColumn get createdAt => dateTime()();

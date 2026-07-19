@@ -4,7 +4,7 @@
 ; Replace these defines with your actual values
 
 #define MyAppName "AI Chat"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.2"
 #define MyAppPublisher "Lelanka"
 #define MyAppURL "https://yourwebsite.com"
 #define MyAppExeName "flutter_ai_chat_app_openrouter.exe"

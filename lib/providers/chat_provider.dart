@@ -84,8 +84,18 @@ class ChatProvider extends ChangeNotifier {
   // Failed messages
   Set<String> _failedMessageIds = {};
 
+  // Streaming isolation — separate notifier for in-progress content
+  final StreamingState streamingState = StreamingState();
+  bool _streamingFinished = false;
+
   // Pending attachment
   FileAttachment? _pendingAttachment;
+
+  // PDF render cache — avoids re-rendering the same PDF file on every send
+  final Map<String, PdfRenderResult> _pdfRenderCache = {};
+  bool _isPreparingPdf = false;
+
+  bool get isPreparingPdf => _isPreparingPdf;
 
   // Getters
   List<ChatsTableData> get chats => _chats;
@@ -289,6 +299,7 @@ class ChatProvider extends ChangeNotifier {
         folderId: Value(folderId),
         title: Value(title ?? 'New Chat'),
         skillId: Value(skillId),
+        isPinned: const Value(false),
         totalInputTokens: const Value(0),
         totalOutputTokens: const Value(0),
         createdAt: Value(now),
@@ -309,6 +320,8 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> selectChat(String id) async {
     _currentChatId = id;
+    // Clear PDF cache when switching chats to free memory on mobile
+    _pdfRenderCache.clear();
     _isLoading = true;
     notifyListeners();
 
@@ -400,6 +413,18 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> deleteChat(String id) async {
     try {
+      // Clean up attachment files before deletion
+      final msgs = await _db.getMessages(id);
+      for (final msg in msgs) {
+        if (msg.attachmentPath != null) {
+          try {
+            final file = File(msg.attachmentPath!);
+            if (await file.exists()) {
+              await file.delete();
+            }
+          } catch (_) {}
+        }
+      }
       await _db.deleteChat(id);
       _chats.removeWhere((c) => c.id == id);
       if (_currentChatId == id) {
@@ -494,6 +519,24 @@ class ChatProvider extends ChangeNotifier {
       return _chats.where((c) => c.folderId == null).toList();
     }
     return _chats.where((c) => c.folderId == folderId).toList();
+  }
+
+  // ========================================================================
+  // Pin / Unpin
+  // ========================================================================
+
+  Future<void> togglePinChat(String chatId) async {
+    try {
+      final chat = _chats.where((c) => c.id == chatId).firstOrNull;
+      if (chat == null) return;
+      await (_db.update(_db.chatsTable)..where((t) => t.id.equals(chatId)))
+          .write(ChatsTableCompanion(isPinned: Value(!chat.isPinned)));
+      _chats = await _db.getAllChats();
+      notifyListeners();
+    } catch (e) {
+      _error = _friendlyError(e);
+      notifyListeners();
+    }
   }
 
   // ========================================================================
@@ -646,6 +689,7 @@ class ChatProvider extends ChangeNotifier {
     String text, {
     String? messageIdToReplace,
     FileAttachment? attachment,
+    String? systemContext,
   }) async {
     if (_currentChatId == null && text.isEmpty && attachment == null) return;
 
@@ -656,7 +700,12 @@ class ChatProvider extends ChangeNotifier {
 
     _isSending = true;
     _error = null;
+    _streamingFinished = false;
     _streamingChatId = _currentChatId;
+    streamingState.isStreaming = true;
+    streamingState.content = '';
+    streamingState.messageId = null;
+    streamingState.notifyListeners();
     notifyListeners();
 
     try {
@@ -763,6 +812,36 @@ class ChatProvider extends ChangeNotifier {
         );
       }
 
+      // Pre-render all PDFs (max 3 to limit memory on mobile) before building API messages.
+      // Shows a loading state so the user knows the app is working.
+      int pdfCount = 0;
+      bool needsPdfRender = false;
+      for (final msg in _messages) {
+        if (msg.attachmentPath != null && msg.inputType == 'pdf' && msg.role == 'user') {
+          if (!_pdfRenderCache.containsKey(msg.attachmentPath)) {
+            needsPdfRender = true;
+            break;
+          }
+        }
+      }
+      if (needsPdfRender) {
+        _isPreparingPdf = true;
+        notifyListeners();
+        pdfCount = 0;
+        for (final msg in _messages) {
+          if (msg.attachmentPath != null && msg.inputType == 'pdf' && msg.role == 'user') {
+            if (!_pdfRenderCache.containsKey(msg.attachmentPath)) {
+              if (pdfCount >= 3) break;
+              final result = await PdfService.renderPdfAsImages(msg.attachmentPath!);
+              _pdfRenderCache[msg.attachmentPath!] = result;
+              pdfCount++;
+            }
+          }
+        }
+        _isPreparingPdf = false;
+        notifyListeners();
+      }
+
       // Build message list for API
       final apiMessages = <Map<String, dynamic>>[];
 
@@ -770,6 +849,14 @@ class ChatProvider extends ChangeNotifier {
         apiMessages.add({
           'role': 'system',
           'content': _activeSkillPrompt,
+        });
+      }
+
+      // Inject web search context (if provided) — between system prompt and history
+      if (systemContext != null && systemContext.isNotEmpty) {
+        apiMessages.add({
+          'role': 'system',
+          'content': systemContext,
         });
       }
 
@@ -830,9 +917,10 @@ class ChatProvider extends ChangeNotifier {
             apiMessages.add({'role': msg.role, 'content': msg.content});
           }
         } else if (msg.attachmentPath != null && msg.inputType == 'pdf') {
-          // Render PDF pages as images and send to vision model
+          // Render PDF pages as images and send to vision model.
+          // If image rendering fails, extracted text is sent instead.
           if (msg.role == 'user' && msg.attachmentPath != null) {
-            final pdfResult = await PdfService.renderPdfAsImages(msg.attachmentPath!);
+            final pdfResult = _pdfRenderCache[msg.attachmentPath!] ?? await PdfService.renderPdfAsImages(msg.attachmentPath!);
             if (pdfResult.hasImages) {
               final content = OpenRouterService.buildMultimodalContent(
                 text: msg.content.isNotEmpty
@@ -841,8 +929,16 @@ class ChatProvider extends ChangeNotifier {
                 imageBytesList: pdfResult.images,
               );
               apiMessages.add({'role': msg.role, 'content': content});
+            } else if (pdfResult.extractedText != null && pdfResult.extractedText!.isNotEmpty) {
+              // Fallback — send extracted PDF text content
+              final content = OpenRouterService.buildMultimodalContent(
+                text: msg.content.isNotEmpty
+                    ? '${msg.content}\n\n--- PDF Content (${pdfResult.totalPages} pages) ---\n${pdfResult.extractedText}'
+                    : '--- PDF Content (${pdfResult.totalPages} pages, ${pdfResult.extractedText!.length} chars) ---\n${pdfResult.extractedText}',
+              );
+              apiMessages.add({'role': msg.role, 'content': content});
             } else {
-              // Fallback — send as text
+              // Fallback — send as generic text reference
               final content = OpenRouterService.buildMultimodalContent(
                 text: '[PDF file: ${msg.attachmentPath!.split('/').last}] ${msg.content}',
               );
@@ -900,7 +996,10 @@ class ChatProvider extends ChangeNotifier {
         temperature: temperature,
         includeReasoning: true,
         onToken: (token) {
+          if (_streamingFinished) return;
           _streamingContent += token;
+          streamingState.content = _streamingContent;
+          streamingState.notifyListeners();
           _debounceBuffer += token;
           _debounceAssistantId = assistantId;
 
@@ -917,9 +1016,12 @@ class ChatProvider extends ChangeNotifier {
           }
         },
         onComplete: (response) async {
+          _streamingFinished = true;
           // Cancel any pending debounce flushes to prevent race condition
           _debounceTimer?.cancel();
           _debounceNeedsFlush = false;
+          streamingState.isStreaming = false;
+          streamingState.notifyListeners();
           _streamingContent = response.content ?? '';
           _streamingReasoning = response.reasoning;
           _streamingInputTokens = response.promptTokens;
@@ -1008,6 +1110,9 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
         },
         onError: (error) {
+          _streamingFinished = true;
+          streamingState.isStreaming = false;
+          streamingState.notifyListeners();
           // Cancel any pending debounce flushes
           _debounceTimer?.cancel();
           _debounceNeedsFlush = false;
@@ -1056,12 +1161,20 @@ extension on ChatsTableCompanion {
       title: title.value,
       skillId: skillId.value,
       forkedFromMessageId: forkedFromMessageId.value,
+      isPinned: isPinned.present ? isPinned.value : false,
       totalInputTokens: totalInputTokens.value,
       totalOutputTokens: totalOutputTokens.value,
       createdAt: createdAt.value,
       updatedAt: updatedAt.value,
     );
   }
+}
+
+/// Separate notifier for streaming content — avoids rebuilding non-streaming widgets on every token.
+class StreamingState extends ChangeNotifier {
+  String content = '';
+  bool isStreaming = false;
+  String? messageId;
 }
 
 /// Internal score holder for memory retrieval.

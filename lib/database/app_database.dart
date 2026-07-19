@@ -37,7 +37,10 @@ extension FolderQueries on AppDatabase {
 /// Convenience methods for chat operations
 extension ChatQueries on AppDatabase {
   Future<List<ChatsTableData>> getAllChats() =>
-      (select(chatsTable)..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
+      (select(chatsTable)..orderBy([
+        (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+        (t) => OrderingTerm.desc(t.updatedAt),
+      ])).get();
 
   Future<ChatsTableData?> getChat(String id) =>
       (select(chatsTable)..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -284,7 +287,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -359,6 +362,14 @@ class AppDatabase extends _$AppDatabase {
           if (from < 3) {
             // Add memoryEnabled column to settings
             await m.addColumn(settingsTable, settingsTable.memoryEnabled);
+          }
+          if (from < 4 || from == 4) {
+            // Add isPinned column to chats_table (Drift table name)
+            try {
+              await customStatement('ALTER TABLE chats_table ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0');
+            } catch (_) {
+              // Column may already exist if a previous migration partially ran
+            }
           }
         },
       );
