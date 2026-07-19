@@ -18,7 +18,7 @@ class RichContent extends StatelessWidget {
   final String? searchQuery;
   // Raw character offsets (into `content`) of the currently-active search
   // match, if this bubble contains it. Used to style that one occurrence
-  // distinctly from the other matches, and to give it a key we can scroll to.
+  // distinctly from the other matches.
   final int? activeMatchStart;
   final int? activeMatchEnd;
   final GlobalKey? activeMatchKey;
@@ -79,16 +79,16 @@ class RichContent extends StatelessWidget {
 
       if (isActive) {
         // Wrapped in a WidgetSpan (instead of a plain TextSpan) purely so we
-        // can attach a GlobalKey to it — that lets the chat screen call
-        // Scrollable.ensureVisible on this exact occurrence, not just the
-        // message bubble as a whole.
+        // can attach a GlobalKey to it — that's what lets the chat screen
+        // call Scrollable.ensureVisible() on this exact occurrence, not
+        // just the message bubble as a whole.
         spans.add(WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: Container(
             key: activeMatchKey,
             padding: const EdgeInsets.symmetric(horizontal: 1),
             decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: 0.55),
+              color: Colors.orange.withValues(alpha: 0.6),
               borderRadius: BorderRadius.circular(2),
             ),
             child: Text(matchText, style: style.copyWith(fontWeight: FontWeight.w700)),

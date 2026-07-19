@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
-import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:flutter_ai_chat_app_openrouter/providers/chat_provider.dart';
 import 'package:flutter_ai_chat_app_openrouter/database/app_database.dart';
 import 'package:flutter_ai_chat_app_openrouter/widgets/message_bubble.dart';
@@ -55,11 +55,11 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
-  // Message list scrolling — ItemScrollController lets us jump straight to an
-  // index (even if that item hasn't been built yet), which a plain
-  // ScrollController + GlobalKey cannot do reliably for variable-height items.
-  final ItemScrollController _itemScrollController = ItemScrollController();
-  final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
+  // AutoScrollController is a regular ScrollController (so _onScroll /
+  // _scrollToBottom work exactly like before) plus scrollToIndex(), which
+  // scrolls incrementally to build+reveal an item even if it's currently
+  // far outside the viewport.
+  final AutoScrollController _scrollController = AutoScrollController();
   bool _showScrollToBottom = false;
 
   // Search state — ChatSearchNotifier is the single source of truth for matches
@@ -67,8 +67,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   // Attached (via MessageBubble -> RichContent) to the exact active match's
-  // span, so we can fine-scroll to it inside a long message after the
-  // coarse per-message jump.
+  // span, so we can fine-scroll to it inside a long message once the right
+  // bubble has been scrolled into the (real, single) Scrollable's viewport.
   final GlobalKey _activeMatchKey = GlobalKey();
 
   // Inline attachment bar (stays above keyboard, no bottom sheet)
@@ -87,13 +87,14 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ChatProvider>().loadChats();
     });
-    _itemPositionsListener.itemPositions.addListener(_onScroll);
+    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
     _messageController.dispose();
-    _itemPositionsListener.itemPositions.removeListener(_onScroll);
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _drawerSearchController.dispose();
@@ -101,13 +102,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onScroll() {
-    final positions = _itemPositionsListener.itemPositions.value;
-    if (positions.isEmpty) return;
-    final chatProvider = context.read<ChatProvider>();
-    final lastIndex = chatProvider.messages.length - 1;
-    // "Near bottom" = the last item's trailing edge is on/near screen.
-    final lastVisible = positions.map((p) => p.index).reduce((a, b) => a > b ? a : b);
-    final isNearBottom = lastVisible >= lastIndex - 1;
+    if (!_scrollController.hasClients) return;
+    final threshold = 200.0;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+    final isNearBottom = (maxScroll - currentScroll) < threshold;
     if (isNearBottom != !_showScrollToBottom) {
       setState(() {
         _showScrollToBottom = !isNearBottom;
@@ -117,14 +116,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_itemScrollController.isAttached) return;
-      final lastIndex = context.read<ChatProvider>().messages.length - 1;
-      if (lastIndex < 0) return;
-      _itemScrollController.scrollTo(
-        index: lastIndex,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
@@ -187,42 +185,39 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentMatch());
   }
 
-  void _scrollToCurrentMatch() {
+  Future<void> _scrollToCurrentMatch() async {
     final search = context.read<ChatSearchNotifier>();
     if (!search.hasMatches || search.currentMatchIndex < 0) return;
     final match = search.matches[search.currentMatchIndex];
 
     final chatProvider = context.read<ChatProvider>();
     final msgIdx = chatProvider.messages.indexWhere((m) => m.id == match.messageId);
-    if (msgIdx == -1 || !_itemScrollController.isAttached) return;
+    if (msgIdx == -1) return;
 
-    // Coarse jump: bring the right message into the build tree. scrollTo
-    // works by index, so it lands on the exact message even if it hasn't
-    // been built yet.
-    _itemScrollController
-        .scrollTo(
-      index: msgIdx,
+    // Coarse step: scroll incrementally until the target message is actually
+    // built (scrollToIndex re-checks and corrects as it goes, so it works
+    // even when the message is far outside the current viewport).
+    await _scrollController.scrollToIndex(
+      msgIdx,
+      preferPosition: AutoScrollPosition.middle,
       duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-      alignment: 0.4,
-    )
-        .then((_) {
-      if (!mounted) return;
-      // Fine adjustment: once the bubble is built, nudge to the exact
-      // occurrence inside it — this is what handles multiple matches
-      // within the same (possibly long) message.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final activeContext = _activeMatchKey.currentContext;
-        if (activeContext != null && activeContext.mounted) {
-          Scrollable.ensureVisible(
-            activeContext,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-            alignment: 0.5,
-          );
-        }
-      });
-    });
+    );
+    if (!mounted) return;
+
+    // Fine step: now that the bubble is guaranteed to be built, scroll to
+    // the exact occurrence within it. Unlike scrollable_positioned_list,
+    // this list uses one real Scrollable, so ensureVisible reliably finds
+    // and scrolls it — this is what handles multiple matches inside the
+    // same (possibly long) message.
+    final activeContext = _activeMatchKey.currentContext;
+    if (activeContext != null && activeContext.mounted) {
+      await Scrollable.ensureVisible(
+        activeContext,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+        alignment: 0.5,
+      );
+    }
   }
 
   void _nextSearchMatch() {
@@ -713,9 +708,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   return const Center(child: Text('Start a conversation!'));
                                 }
 
-                                return ScrollablePositionedList.builder(
-                                  itemScrollController: _itemScrollController,
-                                  itemPositionsListener: _itemPositionsListener,
+                                return ListView.builder(
+                                  controller: _scrollController,
                                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                                   itemCount: messages.length,
                                   itemBuilder: (context, index) {
@@ -729,29 +723,34 @@ class _ChatScreenState extends State<ChatScreen> {
                                     final isSearchHighlight =
                                         _isSearching && currentMatch != null && currentMatch.messageId == msg.id;
 
-                                    return RepaintBoundary(
-                                      key: ValueKey('bubble_${msg.id}'),
-                                      child: MessageBubble(
-                                        key: ValueKey('msgwidget_${msg.id}'),
-                                        message: msg,
-                                        activeMatchStart: isSearchHighlight ? currentMatch.start : null,
-                                        activeMatchEnd: isSearchHighlight ? currentMatch.end : null,
-                                        activeMatchKey: isSearchHighlight ? _activeMatchKey : null,
-                                        isStarred: chatProvider.isMessageStarred(msg.id),
-                                        showRetry: isFailed && msg.role == 'user',
-                                        highlight: isSearchHighlight,
-                                        searchQuery: _isSearching ? _searchController.text : null,
-                                        onCopy: () {
-                                          Clipboard.setData(ClipboardData(text: msg.content));
-                                          _showTopSnackBar(context, 'Message copied');
-                                        },
-                                        onStar: () => chatProvider.toggleStar(msg.id),
-                                        onRetry: isFailed
-                                            ? () => chatProvider.retryMessage(msg.id)
-                                            : null,
-                                        onFork: (msg.role == 'user' || msg.role == 'assistant')
-                                            ? () => _forkChat(chatProvider, msg.id)
-                                            : null,
+                                    return AutoScrollTag(
+                                      key: ValueKey('scrolltag_${msg.id}'),
+                                      controller: _scrollController,
+                                      index: index,
+                                      child: RepaintBoundary(
+                                        key: ValueKey('bubble_${msg.id}'),
+                                        child: MessageBubble(
+                                          key: ValueKey('msgwidget_${msg.id}'),
+                                          message: msg,
+                                          activeMatchStart: isSearchHighlight ? currentMatch.start : null,
+                                          activeMatchEnd: isSearchHighlight ? currentMatch.end : null,
+                                          activeMatchKey: isSearchHighlight ? _activeMatchKey : null,
+                                          isStarred: chatProvider.isMessageStarred(msg.id),
+                                          showRetry: isFailed && msg.role == 'user',
+                                          highlight: isSearchHighlight,
+                                          searchQuery: _isSearching ? _searchController.text : null,
+                                          onCopy: () {
+                                            Clipboard.setData(ClipboardData(text: msg.content));
+                                            _showTopSnackBar(context, 'Message copied');
+                                          },
+                                          onStar: () => chatProvider.toggleStar(msg.id),
+                                          onRetry: isFailed
+                                              ? () => chatProvider.retryMessage(msg.id)
+                                              : null,
+                                          onFork: (msg.role == 'user' || msg.role == 'assistant')
+                                              ? () => _forkChat(chatProvider, msg.id)
+                                              : null,
+                                        ),
                                       ),
                                     );
                                   },
